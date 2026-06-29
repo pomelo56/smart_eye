@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Models
+models/*.pt
+models/*.onnx
+models/*.paddle
+models/*.nb
+models/inference/
+.paddlex_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Data
+data/*.jpg
+data/*.png
+data/*.mp4
+data/*.mov
+!data/.gitkeep
+
+# Logs
+*.log
+logs/
