@@ -1,5 +1,18 @@
 from pathlib import Path
 
+# ============================================================
+# 版本管理
+# ============================================================
+# 修改版本时同步更新 docs/CHANGELOG.md 并打 git tag
+# 格式: 主版本.次版本.修订号 (SemVer)
+__version__ = "0.3.0"
+__version_info__ = tuple(int(x) for x in __version__.split("."))
+__app_name__ = "慧眼 SmartEye"
+__app_name_en__ = "SmartEye"
+
+# ============================================================
+# 路径配置
+# ============================================================
 BASE_DIR = Path(__file__).resolve().parent.parent
 MODELS_DIR = BASE_DIR / "models"
 DATA_DIR = BASE_DIR / "data"

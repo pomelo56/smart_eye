@@ -16,12 +16,13 @@ from src.config import (
     DETECTION_CLASS_CONFIDENCE_OVERRIDES,
     OCR_MIN_CONFIDENCE, OCR_MAX_PICKUP_CODE_LEN, OCR_MAX_NAME_LEN,
     FEEDBACK_DIR,
+    __version__, __app_name__,
 )
 
 
 class BlindFindApp:
     def __init__(self):
-        print("[BlindFind] 正在初始化...")
+        print(f"[BlindFind] {__app_name__} v{__version__} 正在初始化...")
 
         self.camera = Camera()
         print("[BlindFind] 摄像头初始化完成")
@@ -74,7 +75,7 @@ class BlindFindApp:
 
     def run(self):
         self.running = True
-        self.speech.speak("盲找助手已启动", category="system")
+        self.speech.speak(f"{__app_name__}已启动", category="system")
 
         while self.running:
             frame = self.camera.read()

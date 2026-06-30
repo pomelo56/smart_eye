@@ -14,6 +14,7 @@ class OCRValidator:
             "overall_valid": False,
             "confidence_score": 0.0,
             "field_validity": {},
+            "failed_reasons": [],
         }
 
         customer_name = takeout_info.get("customer_name")
@@ -42,9 +43,22 @@ class OCRValidator:
             "raw_text": raw_text,
         }
 
+        failed_reasons = []
+
+        if customer_name is not None and not name_valid:
+            failed_reasons.append(f"取餐人姓名无效: '{customer_name}'")
+        if pickup_code is not None and not code_valid:
+            failed_reasons.append(f"取餐码格式无效: '{pickup_code}'")
+        if phone_tail is not None and not tail_valid:
+            failed_reasons.append(f"手机尾号格式无效: '{phone_tail}'")
+        if merchant is not None and not merchant_valid:
+            failed_reasons.append(f"商家名称无效: '{merchant}'")
+
         if ocr_results:
             avg_confidence = self._calculate_avg_confidence(ocr_results)
             result["confidence_score"] = avg_confidence
+            if not self.validate_overall_confidence(ocr_results):
+                failed_reasons.append(f"OCR平均置信度过低: {avg_confidence:.2f} (阈值: {self.min_confidence})")
         else:
             valid_fields = sum(1 for v in result["field_validity"].values() if v)
             total_fields = len(result["field_validity"])
@@ -52,11 +66,16 @@ class OCRValidator:
 
         has_valid_field = any(result["field_validity"].values())
 
+        if not has_valid_field:
+            failed_reasons.append("无任何有效识别字段")
+
         if ocr_results:
             overall_confidence_ok = self.validate_overall_confidence(ocr_results)
             result["overall_valid"] = has_valid_field and overall_confidence_ok
         else:
             result["overall_valid"] = has_valid_field
+
+        result["failed_reasons"] = failed_reasons
 
         return result
 

@@ -157,7 +157,7 @@ class BlindFindDemo:
 
             if validation["overall_valid"]:
                 valid_text = "通过 ✓"
-                speech_text = self.ocr_engine.format_speech(info)
+                speech_text = self.ocr_engine.format_speech(validation["validated_info"])
             else:
                 reasons = validation.get("failed_reasons", [])
                 if reasons:
