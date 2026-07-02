@@ -49,6 +49,8 @@ class TtsService {
   /// Supported inputs:
   /// - Meal-code phrases such as "取餐码是 井 15" or "井 15"
   /// - Fixed prompts: "欢迎使用慧眼...", "没有识别到取餐码..."
+  /// - Help prompt: any text containing "帮助" or "操作帮助"
+  /// - Distance feedback: "beep_slow" or "beep_fast" (internal codes)
   ///
   /// Dynamic meal codes are decomposed into individual digit clips.
   Future<void> speak(String text) async {
@@ -92,6 +94,17 @@ class TtsService {
     }
     if (trimmed.contains('没有识别到取餐码')) {
       return ['assets/audio/none.mp3'];
+    }
+    if (trimmed.contains('帮助') || trimmed.contains('操作帮助')) {
+      return ['assets/audio/help.mp3'];
+    }
+
+    // Distance feedback codes (not user-facing text).
+    if (trimmed == 'beep_slow') {
+      return ['assets/audio/beep_slow.mp3'];
+    }
+    if (trimmed == 'beep_fast') {
+      return ['assets/audio/beep_fast.mp3'];
     }
 
     // Meal code utterances: "取餐码是 井 15" or "井 15".

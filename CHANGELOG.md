@@ -10,8 +10,14 @@
 ### Added
 - 初始化项目结构和基础文档（PRD、AGENTS、SOUL、USER）
 - grill-me 需求审查：通过 10+ 轮追问确认核心交互方案
-- TDD 开发：OcrService（16 个测试）、TtsService（8 个测试）、MealCode（4 个测试）
-- HomeScreen：相机预览 + OCR 扫描 + TTS 播报 + 手势识别 + 历史记录
+- TDD 开发：OcrService（16 个测试）、TtsService（8 个测试）、MealCode（4 个测试）、HistoryService（6 个测试）
+- HomeScreen：相机预览 + OCR 扫描 + 语音播报 + 手势识别 + 历史记录 + 距离反馈音 + 首次启动教程
+- 音频兜底方案：14 个预录音频素材 + 数字动态拼接 + Android MediaPlayer 原生播放通道
+- 手势操作：单击重听、三击重新识别、上滑播报历史记录、下滑播报操作帮助
+- 历史记录：`HistoryService` 保存最近 5 条记录，24 小时自动过期清理
+- 距离反馈音：检测到文字时播放慢提示音，识别到取餐码时播放快提示音
+- 无障碍语义：HomeScreen 全屏包裹 `Semantics` 标签，描述操作方式
+- 文档：`docs/HANDOVER.md`（未来 Agent 接手指南），更新 `AGENTS.md` 反映音频兜底方案
 
 ### Changed
 - 项目定位升级：从「盲人取餐小工具」升级为「慧眼 SmartEye — AI 视障寻物助手」

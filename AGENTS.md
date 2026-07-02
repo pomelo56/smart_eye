@@ -14,6 +14,13 @@
 - **开发阶段**：MVP（v0.1.0）
 - **口号**：听见物品，找到东西
 
+## 关键架构决策（2026-07-02 已确认）
+
+- **语音方案**：`flutter_tts` 在 OPPO/ColorOS 上无法绑定系统 TTS 引擎，因此 MVP 改为**预录音频 + Android MediaPlayer**。所有语音素材位于 `assets/audio/`，`TtsService` 将文本映射为音频片段序列。
+- **原生音频通道**：`MainActivity.kt` 暴露 `com.smart_eye/audio` MethodChannel，`AudioService` 通过它调用 `MediaPlayer` 顺序播放 assets。
+- **Flutter asset 路径陷阱**：Dart 使用 `assets/audio/xxx.mp3`，但 Android `AssetManager` 需要 `flutter_assets/assets/audio/xxx.mp3`。参见 `docs/HANDOVER.md` 第 5 节。
+- **OCR 方案**：继续使用 `google_mlkit_text_recognition` 本地模型，禁止云端 OCR。
+
 ---
 
 ## 2. 技术栈与工具链
@@ -25,7 +32,7 @@
 | Dart | 编程语言 | 3.x |
 | camera | 相机控制 | latest |
 | google_mlkit_text_recognition | OCR 文字识别（本地） | latest |
-| flutter_tts | 文字转语音 | latest |
+| audio assets + MediaPlayer | 语音播报（替代 flutter_tts） | 内置 |
 | shared_preferences | 本地数据持久化 | latest |
 
 ### 2.2 开发命令
@@ -67,11 +74,13 @@ smart_eye/
 ├── lib/
 │   ├── main.dart            # 应用入口
 │   ├── screens/             # 页面（仅 HomeScreen 一个）
-│   ├── services/            # 核心服务（Camera/Ocr/Tts）
+│   ├── services/            # 核心服务（Camera/Ocr/Tts/Audio）
 │   ├── models/              # 数据模型
 │   ├── widgets/             # 可复用组件
 │   ├── utils/               # 工具函数
 │   └── l10n/                # 国际化（预留）
+├── assets/
+│   └── audio/               # 预录音频素材（数字、井、提示语）
 ├── test/
 │   ├── unit/                # 单元测试（TDD 核心）
 │   │   ├── services/
@@ -81,6 +90,7 @@ smart_eye/
 ├── scripts/
 │   └── test.sh              # 一键测试脚本
 └── docs/
+    ├── HANDOVER.md          # Agent 接手文档（必读）
     ├── CHANGELOG.md         # 版本变更归档
     ├── plans/               # 实施计划
     └── specs/               # 设计规格文档
@@ -95,7 +105,8 @@ smart_eye/
 | 新增/修改页面 | `lib/screens/` + `lib/main.dart` | 必须包裹 Semantics |
 | 修改相机逻辑 | `lib/services/camera_service.dart` | 注意权限和生命周期 |
 | 修改 OCR 逻辑 | `lib/services/ocr_service.dart` | 纯本地处理，禁止调云端 |
-| 修改语音逻辑 | `lib/services/tts_service.dart` | 必须处理初始化失败 |
+| 修改语音逻辑 | `lib/services/tts_service.dart` + `lib/services/audio_service.dart` + `android/app/src/main/kotlin/com/example/smart_eye/MainActivity.kt` | 必须处理初始化失败；新增音频素材需同步更新 `_mapTextToAssets` |
+| 修改音频素材 | `assets/audio/` + `pubspec.yaml` | 新素材必须注册到 `pubspec.yaml` assets |
 | 新增数据模型 | `lib/models/` | 必须写单元测试 |
 | 新增工具函数 | `lib/utils/` | 必须写单元测试 |
 
@@ -117,8 +128,13 @@ smart_eye/
 - 禁止静默失败，所有异常必须有语音解释
 - 取餐码播报格式：「井 15」（`#` 读作「井」）
 - 长文本分段播报，每段不超过 15 秒
-- TTS 使用正常语速（1.0x），扬声器最大音量
+- 语音使用正常语速，扬声器最大音量
 - 首次启动必须播报完整操作教程
+- **新增音频素材**时：
+  1. 放入 `assets/audio/`
+  2. 在 `pubspec.yaml` 的 `assets:` 下注册
+  3. 在 `TtsService._mapTextToAssets()` 中添加映射规则
+  4. 如需从原生 `AssetManager` 读取，路径需为 `flutter_assets/<asset-key>`
 
 ### 5.4 TDD 规范（强制）
 ```
@@ -157,10 +173,11 @@ smart_eye/
 | 问题 | 排查路径 |
 |------|---------|
 | OCR 识别率低 | 检查 `camera_controller` 分辨率设置 → 检查对焦模式 → 检查图像预处理 |
-| TTS 不播报 | 检查 `flutter_tts` 初始化状态 → 检查语言设置（中文） → 检查音量权限 |
+| 语音不播报 | 检查 `assets/audio/` 是否已在 `pubspec.yaml` 注册 → 确认 `TtsService._mapTextToAssets()` 包含目标文本 → 确认 Android `AssetManager` 路径使用 `flutter_assets/<asset-key>` → 检查媒体音量 |
 | 相机黑屏 | 检查 Android 权限（Camera） → 检查 `Surface` 初始化时序 → 检查生命周期绑定 |
 | 手势不响应 | 检查 `GestureDetector` 层级 → 检查 `Semantics` 是否拦截事件 |
 | 测试失败 | 检查是否先写测试再看失败 → 检查测试是否用真实代码而非 mock |
+| 原生层找不到 asset | 在 `MainActivity.kt` 的 `assets.openFd()` 前加 `flutter_assets/` 前缀，参见 `docs/HANDOVER.md` 第 5 节 |
 
 ---
 

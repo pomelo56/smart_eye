@@ -6,15 +6,16 @@ import 'package:flutter/material.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/history_service.dart';
 import '../services/ocr_service.dart';
 import '../services/tts_service.dart';
 
-/// Simplified main screen focused on reliable voice feedback.
+/// Main screen for the SmartEye MVP.
 ///
-/// Camera and OCR remain for input, but the UI is stripped down to the
-/// essentials needed by a blind/low-vision user: a large touch surface and
-/// clear audio feedback.
+/// Provides a full-screen touch surface with camera preview, voice feedback,
+/// and simple gestures designed for blind/low-vision users.
 class HomeScreen extends StatefulWidget {
+  /// Creates the home screen.
   const HomeScreen({super.key});
 
   @override
@@ -24,6 +25,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   CameraController? _cameraController;
   late TtsService _ttsService;
+  late HistoryService _historyService;
   final OcrService _ocrService = OcrService();
   final TextRecognizer _textRecognizer = TextRecognizer();
 
@@ -31,6 +33,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isProcessing = false;
   String? _lastAnnouncedCode;
   Timer? _scanTimer;
+  bool _feedbackBusy = false;
 
   // Tiny debug log for field diagnostics.
   final List<String> _logs = [];
@@ -60,6 +63,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _ttsService.initialize();
     _log('语音: ${_ttsService.isInitialized ? '就绪' : '未就绪'}');
 
+    final prefs = await SharedPreferences.getInstance();
+    _historyService = HistoryService(prefs: prefs);
+
     // Audio-first: play a startup chirp so the user knows the app is alive.
     await _ttsService.speak('欢迎使用慧眼');
 
@@ -75,7 +81,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         await Future.delayed(const Duration(seconds: 1));
         await _ttsService.speak(
           '欢迎使用慧眼。将手机摄像头对准外卖袋上的打印小票，'
-          '应用会自动识别取餐码并播报。单击屏幕重听，三击重新识别。',
+          '应用会自动识别取餐码并播报。单击屏幕重听，三击重新识别，'
+          '向上滑动查看历史记录，向下滑动获取操作帮助。',
         );
         await prefs.setBool(_tutorialKey, true);
         _log('教程已播报');
@@ -164,12 +171,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (await file.exists()) await file.delete();
       } catch (_) {}
 
+      final hasText = recognizedText.text.trim().isNotEmpty;
+      if (hasText) {
+        await _playDistanceFeedback(slow: true);
+      }
+
       final codes = _ocrService.extractMealCodes(recognizedText.text);
       if (codes.isNotEmpty) {
+        await _playDistanceFeedback(slow: false);
+
         final confirmed = _ocrService.processFrame(codes.first);
         if (confirmed != null && !_ocrService.isInCooldown(confirmed)) {
           _log('识别: $confirmed');
           _lastAnnouncedCode = confirmed;
+          await _historyService.add(confirmed);
           await _ttsService
               .speak('取餐码是 ${_ttsService.formatMealCode(confirmed)}');
         }
@@ -179,6 +194,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     } finally {
       _isProcessing = false;
     }
+  }
+
+  Future<void> _playDistanceFeedback({required bool slow}) async {
+    if (_feedbackBusy) return;
+    _feedbackBusy = true;
+    final code = slow ? 'beep_slow' : 'beep_fast';
+    await _ttsService.speak(code);
+    // Small lock to prevent feedback spamming.
+    await Future.delayed(const Duration(milliseconds: 300));
+    _feedbackBusy = false;
   }
 
   Future<void> _replayLast() async {
@@ -199,6 +224,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _ttsService.speak('没有识别到取餐码，请重新对准小票');
   }
 
+  Future<void> _announceHistory() async {
+    _log('历史');
+    try {
+      final records = await _historyService.getRecent();
+      if (records.isEmpty) {
+        await _ttsService.speak('没有识别记录');
+        return;
+      }
+
+      final buffer = StringBuffer('最近识别记录：');
+      for (var i = 0; i < records.length; i++) {
+        final record = records[i];
+        buffer.write('第 ${i + 1} 条，取餐码 ${record.code}，${record.timeDescription}');
+        if (i < records.length - 1) {
+          buffer.write('；');
+        }
+      }
+
+      await _ttsService.speak(buffer.toString());
+    } catch (e) {
+      _log('历史错误: $e');
+      await _ttsService.speak('历史记录读取失败');
+    }
+  }
+
+  Future<void> _announceHelp() async {
+    _log('帮助');
+    await _ttsService.speak('操作帮助');
+  }
+
   int _tapCount = 0;
   Timer? _tapTimer;
 
@@ -213,6 +268,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
       _tapCount = 0;
     });
+  }
+
+  void _handleVerticalDrag(DragUpdateDetails details) {
+    // Ignore small accidental movements.
+  }
+
+  void _handleVerticalDragEnd(DragEndDetails details) {
+    final velocity = details.primaryVelocity;
+    if (velocity == null) return;
+
+    if (velocity < -800) {
+      // Upward swipe
+      _announceHistory();
+    } else if (velocity > 800) {
+      // Downward swipe
+      _announceHelp();
+    }
   }
 
   @override
@@ -241,51 +313,56 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: _handleTap,
-      behavior: HitTestBehavior.opaque,
-      child: Scaffold(
-        backgroundColor: Colors.black,
-        body: Stack(
-          fit: StackFit.expand,
-          children: [
-            // Optional camera preview.
-            if (_isCameraReady && _cameraController != null)
-              SizedBox.expand(
-                child: FittedBox(
-                  fit: BoxFit.cover,
-                  child: SizedBox(
-                    width: _cameraController!.value.previewSize?.height ?? 720,
-                    height: _cameraController!.value.previewSize?.width ?? 1280,
-                    child: CameraPreview(_cameraController!),
+    return Semantics(
+      label: '慧眼主界面，全屏触摸区域。单击重听，三击重新识别，向上滑动播报历史记录，向下滑动播报操作帮助。',
+      child: GestureDetector(
+        onTap: _handleTap,
+        onVerticalDragUpdate: _handleVerticalDrag,
+        onVerticalDragEnd: _handleVerticalDragEnd,
+        behavior: HitTestBehavior.opaque,
+        child: Scaffold(
+          backgroundColor: Colors.black,
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              // Optional camera preview.
+              if (_isCameraReady && _cameraController != null)
+                SizedBox.expand(
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    child: SizedBox(
+                      width: _cameraController!.value.previewSize?.height ?? 720,
+                      height: _cameraController!.value.previewSize?.width ?? 1280,
+                      child: CameraPreview(_cameraController!),
+                    ),
                   ),
                 ),
-              ),
 
-            // Minimal log overlay.
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: IgnorePointer(
-                child: Container(
-                  color: Colors.black.withOpacity(0.8),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: _logs
-                        .map((l) => Text(
-                              l,
-                              style: const TextStyle(
-                                  color: Colors.greenAccent, fontSize: 12),
-                            ))
-                        .toList(),
+              // Minimal log overlay.
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  child: Container(
+                    color: Colors.black.withOpacity(0.8),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: _logs
+                          .map((l) => Text(
+                                l,
+                                style: const TextStyle(
+                                    color: Colors.greenAccent, fontSize: 12),
+                              ))
+                          .toList(),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

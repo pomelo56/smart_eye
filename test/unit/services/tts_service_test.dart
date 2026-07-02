@@ -92,6 +92,29 @@ void main() {
       expect(audio.playedPaths, equals(['assets/audio/tutorial.mp3']));
     });
 
+    test('maps help text to help clip', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+      await service.speak('操作帮助');
+
+      expect(service.lastSpeakResult, equals(1));
+      expect(audio.playedPaths, equals(['assets/audio/help.mp3']));
+    });
+
+    test('maps beep codes to feedback clips', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+      await service.speak('beep_slow');
+      await service.speak('beep_fast');
+
+      expect(audio.playedPaths, equals([
+        'assets/audio/beep_slow.mp3',
+        'assets/audio/beep_fast.mp3',
+      ]));
+    });
+
     test('does not throw when not initialized', () async {
       final audio = MockAudioService()..setInitialized(false);
       final service = TtsService(audioService: audio);
