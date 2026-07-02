@@ -1,53 +1,24 @@
-import 'package:flutter_tts/flutter_tts.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:smart_eye/services/audio_service.dart';
 import 'package:smart_eye/services/tts_service.dart';
 
-class MockFlutterTts extends Fake implements FlutterTts {
-  String? lastLanguage;
-  double lastSpeechRate = 0;
-  double lastVolume = 0;
-  double lastPitch = 0;
-  bool awaitSpeakCompletionValue = false;
+class MockAudioService extends Fake implements AudioService {
+  final List<String> playedPaths = [];
+  bool _initialized = true;
+
+  void setInitialized(bool value) => _initialized = value;
 
   @override
-  Future<dynamic> setLanguage(String language) async {
-    lastLanguage = language;
-    return 1; // success
+  bool get isInitialized => _initialized;
+
+  @override
+  Future<bool> playAssets(List<String> assetPaths, {double volume = 1.0}) async {
+    playedPaths.addAll(assetPaths);
+    return true;
   }
 
   @override
-  Future<dynamic> setSpeechRate(double rate) async {
-    lastSpeechRate = rate;
-    return 1;
-  }
-
-  @override
-  Future<dynamic> setVolume(double volume) async {
-    lastVolume = volume;
-    return 1;
-  }
-
-  @override
-  Future<dynamic> setPitch(double pitch) async {
-    lastPitch = pitch;
-    return 1;
-  }
-
-  @override
-  Future<dynamic> awaitSpeakCompletion(bool awaitCompletion) async {
-    awaitSpeakCompletionValue = awaitCompletion;
-    return 1;
-  }
-
-  @override
-  Future<dynamic> speak(String text) async {
-    return 1; // success
-  }
-
-  @override
-  Future<dynamic> stop() async {
-    return 1;
-  }
+  Future<void> stop() async {}
 }
 
 void main() {
@@ -74,52 +45,65 @@ void main() {
   });
 
   group('TtsService.initialize', () {
-    test('sets initialized to true on success', () async {
-      final mockTts = MockFlutterTts();
-      final service = TtsService(flutterTts: mockTts);
-      await service.initialize();
+    test('returns true when audio service is ready', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      final ok = await service.initialize();
+      expect(ok, isTrue);
       expect(service.isInitialized, isTrue);
-      expect(mockTts.awaitSpeakCompletionValue, isFalse);
-      expect(mockTts.lastLanguage, equals('zh-CN'));
-      expect(mockTts.lastSpeechRate, equals(1.0));
-      expect(mockTts.lastVolume, equals(1.0));
-      expect(mockTts.lastPitch, equals(1.0));
+      expect(service.engineName, equals('assets'));
     });
 
-    test('tries alternative locales when zh-CN fails', () async {
-      final mockTts = MockFlutterTts();
-      mockTts.setLanguage = (String language) async {
-        mockTts.lastLanguage = language;
-        if (language == 'zh-CN') return 0; // fail
-        if (language == 'zh-TW') return 1; // success
-        return 0;
-      };
-      final service = TtsService(flutterTts: mockTts);
-      await service.initialize();
-      expect(service.isInitialized, isTrue);
+    test('returns false when audio service is not ready', () async {
+      final audio = MockAudioService()..setInitialized(false);
+      final service = TtsService(audioService: audio);
+      final ok = await service.initialize();
+      expect(ok, isFalse);
+      expect(service.isInitialized, isFalse);
     });
   });
 
   group('TtsService.speak', () {
-    test('speaks when initialized', () async {
-      final mockTts = MockFlutterTts();
-      final service = TtsService(flutterTts: mockTts);
+    test('maps meal code to digit clips', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
       await service.initialize();
       await service.speak('取餐码是 井 15');
+
       expect(service.lastSpeakResult, equals(1));
+      expect(
+        audio.playedPaths,
+        equals([
+          'assets/audio/prefix.mp3',
+          'assets/audio/jing.mp3',
+          'assets/audio/num_1.mp3',
+          'assets/audio/num_5.mp3',
+        ]),
+      );
+    });
+
+    test('maps tutorial text to tutorial clip', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+      await service.speak('欢迎使用慧眼。将手机摄像头对准外卖袋');
+
+      expect(service.lastSpeakResult, equals(1));
+      expect(audio.playedPaths, equals(['assets/audio/tutorial.mp3']));
     });
 
     test('does not throw when not initialized', () async {
-      final service = TtsService();
-      // Should not throw, just skip
+      final audio = MockAudioService()..setInitialized(false);
+      final service = TtsService(audioService: audio);
       await service.speak('test');
+      expect(service.lastSpeakResult, equals(-999));
     });
   });
 
   group('TtsService.stop', () {
     test('stops without error', () async {
-      final mockTts = MockFlutterTts();
-      final service = TtsService(flutterTts: mockTts);
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
       await service.initialize();
       await service.stop();
     });

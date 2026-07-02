@@ -26,6 +26,8 @@
 - 修正了取餐码位置假设：从「外卖盒上」改为「外卖袋上的打印小票」
 - 修正了 TTS 语速假设：从「偏慢 0.8x」改为「正常语速 1.0x」（盲人习惯倍速播放）
 - 统一所有文档的项目名称和定位描述，消除版本分裂
+- 修复 OPPO/ColorOS 设备 TTS 无声问题：移除 `flutter_tts`，改用打包音频 + Android MediaPlayer 播放
+- 修复 Flutter assets 在原生代码中的路径前缀错误：`assets/audio/...` 需通过 `flutter_assets/assets/audio/...` 访问
 
 ---
 

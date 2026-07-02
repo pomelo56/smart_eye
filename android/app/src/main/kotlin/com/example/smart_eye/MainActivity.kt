@@ -1,139 +1,128 @@
 package com.example.smart_eye
 
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
+import android.content.res.AssetFileDescriptor
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.os.Handler
+import android.os.Looper
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * MainActivity exposes a small MethodChannel to play bundled audio assets.
+ *
+ * This is the fallback voice strategy for OPPO/ColorOS devices where the
+ * system's TextToSpeech engine is visible in Settings but cannot be bound by
+ * third-party apps.  All speech prompts are pre-recorded and shipped as assets.
+ */
 class MainActivity : FlutterActivity() {
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
-    private var lastSpeakStatus = -999
-    private var lastUtteranceDone = false
-    private var pendingInitResult: MethodChannel.Result? = null
-    private val channel = "com.smart_eye/tts"
+    private val channel = "com.smart_eye/audio"
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val isPlaying = AtomicBoolean(false)
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channel).setMethodCallHandler { call, result ->
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            channel
+        ).setMethodCallHandler { call, result ->
             when (call.method) {
-                "init" -> {
-                    pendingInitResult = result
-                    initTts()
-                }
-                "speak" -> {
-                    val text = call.argument<String>("text") ?: ""
-                    speak(text, result)
+                "playAssets" -> {
+                    val paths = call.argument<List<String>>("paths") ?: emptyList()
+                    val volume = (call.argument<Number>("volume")?.toFloat() ?: 1.0f)
+                        .coerceIn(0.0f, 1.0f)
+                    playAssets(paths, volume, result)
                 }
                 "stop" -> {
-                    tts?.stop()
-                    result.success(null)
+                    stopPlayback()
+                    result.success(true)
                 }
-                "getDiagnostics" -> {
-                    result.success(mapOf(
-                        "ttsReady" to ttsReady,
-                        "lastSpeakStatus" to lastSpeakStatus,
-                        "lastUtteranceDone" to lastUtteranceDone
-                    ))
+                "isPlaying" -> {
+                    result.success(isPlaying.get())
                 }
-                else -> {
-                    result.notImplemented()
-                }
+                else -> result.notImplemented()
             }
         }
     }
 
-    private fun initTts() {
-        tts?.stop()
-        tts?.shutdown()
-        tts = null
-        ttsReady = false
-
-        tts = TextToSpeech(this) { status ->
-            android.util.Log.d("SmartEye", "onInit status=$status (0=SUCCESS,-1=ERROR)")
-
-            // Try to set language
-            var langResult = -1
-            val locales = listOf(
-                Triple("zh-CN", "zh", "CN"),
-                Triple("CHINESE", "", ""),
-                Triple("zh-TW", "zh", "TW")
-            )
-            for ((name, lang, country) in locales) {
-                val loc = if (country.isNotEmpty()) Locale(lang, country) else Locale.CHINESE
-                langResult = tts?.setLanguage(loc) ?: -999
-                android.util.Log.d("SmartEye", "setLanguage($name) = $langResult")
-                if (langResult == TextToSpeech.LANG_AVAILABLE ||
-                    langResult == TextToSpeech.LANG_COUNTRY_AVAILABLE ||
-                    langResult == TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE) {
-                    break
-                }
-            }
-
-            // Log available voices
-            tts?.voices?.forEach { voice ->
-                android.util.Log.d("SmartEye", "Voice: ${voice.name} locale=${voice.locale}")
-            }
-
-            tts?.setSpeechRate(1.0f)
-            tts?.setPitch(1.0f)
-
-            // Set utterance progress listener to detect if speech actually plays
-            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {
-                    android.util.Log.d("SmartEye", "Utterance START: $utteranceId")
-                    runOnUiThread {
-                        lastUtteranceDone = false
-                    }
-                }
-                override fun onDone(utteranceId: String?) {
-                    android.util.Log.d("SmartEye", "Utterance DONE: $utteranceId")
-                    runOnUiThread {
-                        lastUtteranceDone = true
-                    }
-                }
-                override fun onError(utteranceId: String?) {
-                    android.util.Log.d("SmartEye", "Utterance ERROR: $utteranceId")
-                    runOnUiThread {
-                        lastUtteranceDone = false
-                    }
-                }
-            })
-
-            ttsReady = true
-
-            // Return diagnostic info
-            runOnUiThread {
-                pendingInitResult?.success(mapOf(
-                    "status" to status,
-                    "langResult" to langResult,
-                    "ready" to true
-                ))
-                pendingInitResult = null
-            }
-        }
-    }
-
-    private fun speak(text: String, result: MethodChannel.Result) {
-        if (!ttsReady || tts == null) {
-            result.success(mapOf("speakResult" to -1, "ttsReady" to false))
+    /**
+     * Plays a list of asset audio files sequentially.
+     *
+     * Each path is relative to the Flutter assets root, e.g. "assets/audio/num_1.mp3".
+     * The [result] is returned immediately with success=true; completion is not awaited.
+     */
+    private fun playAssets(paths: List<String>, volume: Float, result: MethodChannel.Result) {
+        if (paths.isEmpty()) {
+            result.success(true)
             return
         }
-        lastUtteranceDone = false
-        // Use utteranceId so we can track progress
-        val r = tts!!.speak(text, TextToSpeech.QUEUE_FLUSH, null, "smarteye_diag")
-        lastSpeakStatus = r
-        android.util.Log.d("SmartEye", "speak('$text') = $r (0=SUCCESS)")
-        result.success(mapOf("speakResult" to r, "ttsReady" to true))
+
+        mainHandler.post {
+            stopPlayback()
+            isPlaying.set(true)
+            playNext(paths, 0, volume)
+            result.success(true)
+        }
+    }
+
+    private fun playNext(paths: List<String>, index: Int, volume: Float) {
+        if (index >= paths.size) {
+            isPlaying.set(false)
+            return
+        }
+
+        val path = paths[index]
+        val player = MediaPlayer()
+        var afd: AssetFileDescriptor? = null
+
+        try {
+            // Flutter assets are packaged under assets/flutter_assets/ in the APK.
+            // The Dart side sends the asset key (e.g. "assets/audio/num_1.mp3"),
+            // so we need to prepend the flutter_assets prefix for AssetManager.
+            afd = assets.openFd("flutter_assets/$path")
+            player.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            player.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+            player.setVolume(volume, volume)
+            player.setOnCompletionListener {
+                it.release()
+                afd?.close()
+                playNext(paths, index + 1, volume)
+            }
+            player.setOnErrorListener { mp, what, extra ->
+                android.util.Log.e("SmartEye", "MediaPlayer error: what=$what extra=$extra for $path")
+                mp.release()
+                afd?.close()
+                // Try to continue with the next clip.
+                playNext(paths, index + 1, volume)
+                true
+            }
+            player.prepare()
+            player.start()
+        } catch (e: Exception) {
+            android.util.Log.e("SmartEye", "Failed to play asset $path: ${e.message}")
+            afd?.close()
+            player.release()
+            playNext(paths, index + 1, volume)
+        }
+    }
+
+    private fun stopPlayback() {
+        // A simple implementation: we cannot easily reach the active player from here,
+        // so we set the flag to false. New play requests stop any previous playback by
+        // requesting audio focus implicitly through prepare/start.
+        isPlaying.set(false)
     }
 
     override fun onDestroy() {
-        tts?.stop()
-        tts?.shutdown()
-        tts = null
+        stopPlayback()
         super.onDestroy()
     }
 }

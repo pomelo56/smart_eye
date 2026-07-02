@@ -23,7 +23,7 @@ void main() {
 
     test('extracts from typical receipt text', () {
       final service = OcrService();
-      final receipt = 'Customer Copy\n#15 Meituan\nPaid online\nTotal \u00a520.95';
+      const receipt = 'Customer Copy\n#15 Meituan\nPaid online\nTotal \u00a520.95';
       final result = service.extractMealCodes(receipt);
       expect(result, equals(['#15']));
     });
