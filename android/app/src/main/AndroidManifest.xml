@@ -1,10 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Camera permission for OCR scanning -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Storage permission for log export -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
     <!-- Internet permission is NOT needed - all processing is local -->
 
     <application
-        android:label="取餐助手"
+        android:label="慧眼"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

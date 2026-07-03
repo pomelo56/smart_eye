@@ -106,17 +106,11 @@ flutter test
 ### 3.2 构建 Release APK
 
 ```bash
-cd /Users/pomelo/Project/smart_eye_fix_audio   # 当前音频兜底分支
+cd /Users/pomelo/Project/smart_eye
 flutter build apk --release
 ```
 
 输出：`build/app/outputs/flutter-apk/app-release.apk`
-
-复制到原工作区：
-```bash
-cp build/app/outputs/flutter-apk/app-release.apk \
-   /Users/pomelo/Project/smart_eye/smarteye-audio-fallback.apk
-```
 
 ### 3.3 安装到设备（无线 ADB）
 
@@ -175,7 +169,7 @@ assets.openFd("flutter_assets/$path")
 - 单击 → 重听上一次结果
 - 三击 → 清除结果，重新识别
 - 双击 → 无操作（会被吞掉，不触发单击）
-- 上滑/下滑 → 待实现（历史记录 / 帮助）
+- 上滑/下滑 → 已实现（历史记录 / 帮助）
 
 手势定时器为 600ms。对视障用户而言，三击节奏可能偏快，后续可考虑延长窗口或改为「长按 + 滑动」组合。
 
@@ -215,9 +209,9 @@ assets.openFd("flutter_assets/$path")
 | 单击重听 | 已实现 | 通过 `GestureDetector.onTap` |
 | 三击重新识别 | 已实现 | 通过 600ms 内点击计数 |
 | 历史记录 | 待实现 | 计划用 `shared_preferences` + 24h 自动清除 |
-| 上滑播报历史 | 待实现 | 依赖历史记录 |
-| 下滑播报帮助 | 待实现 | 需要新增 `help.mp3` 或拼接文本 |
-| 距离反馈音 | 待实现 | 检测到文字时慢提示，可识别时快提示 |
+| 上滑播报历史 | 已实现 | 通过 VerticalDragGestureRecognizer |
+| 下滑播报帮助 | 已实现 | 拼接预设文本播放 |
+| 距离反馈音 | 已实现 | 检测到文字时慢提示，可识别时快提示 |
 | 完整无障碍语义 | 部分实现 | 所有 Widget 需加 `Semantics` |
 | 光线不足提示 | 未实现 | 需要图像亮度分析 |
 
@@ -246,23 +240,21 @@ assets.openFd("flutter_assets/$path")
 
 ## 8. 分支与版本控制
 
-- `master`：基线分支，包含 Flutter MVP 迁移后的初始状态
-- `fix/tts-init-failure`：尝试修复 `flutter_tts` 的分支，已被 `fix/audio-fallback` 取代
-- `fix/audio-fallback`：当前主开发分支，工作目录 `/Users/pomelo/Project/smart_eye_fix_audio`
+- `master`：主开发分支，`fix/tts-init-failure` 和 `fix/audio-fallback` 已合并到 master 并删除，所有开发在 master 上进行
 
 **新增功能**必须：
-1. 从 `master` 或 `fix/audio-fallback` 创建 feature 分支
+1. 从 `master` 创建 feature 分支
 2. 使用 feature worktree
 3. 先写测试，再写实现
 4. 更新 `CHANGELOG.md`
 5. `flutter analyze` 零警告 + `flutter test` 全绿
-6. 提交并合并到 `fix/audio-fallback`
+6. 提交并合并到 `master`
 
 ---
 
 ## 9. 联系上下文
 
 - 项目目录：`/Users/pomelo/Project/smart_eye`
-- 当前开发工作目录：`/Users/pomelo/Project/smart_eye_fix_audio`
+- 当前开发工作目录：`/Users/pomelo/Project/smart_eye`
 - 目标用户：视障人士，所有改动必须优先考虑语音反馈和无障碍
 - 当前硬约束：OPPO/ColorOS 设备无法使用系统 TTS，必须坚持音频兜底方案

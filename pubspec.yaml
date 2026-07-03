@@ -17,6 +17,8 @@ dependencies:
   google_mlkit_text_recognition: ^0.14.0
   # Shared preferences for first-launch tutorial flag
   shared_preferences: ^2.3.2
+  # File logger: persistent diagnostics and export
+  path_provider: ^2.1.0
 
 flutter:
   uses-material-design: true
@@ -29,3 +31,4 @@ dev_dependencies:
     sdk: flutter
 
   flutter_lints: ^4.0.0
+  test: ^1.25.7

@@ -40,10 +40,12 @@
 |------|------|---------|------|
 | 使用 Flutter 而非原生 Android | 跨平台一致，开发效率高 | 技术栈匹配 | 2026-06-30 |
 | 使用 google_mlkit_text_recognition | 本地运行，不上传云端，符合隐私要求 | 官方文档确认 | 2026-06-30 |
-| 使用 flutter_tts | 轻量，支持中文，无需网络 | 依赖分析 | 2026-06-30 |
+| 使用预录音频 + MediaPlayer 替代 flutter_tts | OPPO/ColorOS 设备无法绑定系统 TTS 引擎，flutter_tts 和原生 TextToSpeech.onInit 均返回 ERROR | 实机测试验证 | 2026-07-02 |
 | 持续扫描（非手动触发） | 盲人用户看不到画面，无法判断何时该手动触发 | grill-me 需求审查 | 2026-06-30 |
 | 多帧验证（连续 2 次一致） | 取餐码短（1-3 位数字），单次误识别概率高 | 需求审查确认 | 2026-06-30 |
 | 距离反馈音（倒车雷达） | 盲人无法判断手机是否对准小票 | 需求审查确认 | 2026-06-30 |
+| 无线 ADB 测试方法 | MacBook Air 无 USB 接口，使用 `adb pair` + `adb connect` 进行无线调试安装 | 实机测试验证 | 2026-07-02 |
+| flutter_assets 路径陷阱 | Android AssetManager 需要 `flutter_assets/` 前缀才能找到 Flutter 打包的 asset 文件 | 实机测试验证 | 2026-07-02 |
 
 ---
 

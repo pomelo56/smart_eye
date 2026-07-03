@@ -121,6 +121,42 @@ void main() {
       await service.speak('test');
       expect(service.lastSpeakResult, equals(-999));
     });
+
+    test('maps "没有识别到取餐码" text to none clip', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+      await service.speak('没有识别到取餐码');
+
+      expect(service.lastSpeakResult, equals(1));
+      expect(audio.playedPaths, equals(['assets/audio/none.mp3']));
+    });
+
+    test('maps pure digit text to digit clips', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+      await service.speak('123');
+
+      expect(service.lastSpeakResult, equals(1));
+      expect(audio.playedPaths, equals([
+        'assets/audio/prefix.mp3',
+        'assets/audio/jing.mp3',
+        'assets/audio/num_1.mp3',
+        'assets/audio/num_2.mp3',
+        'assets/audio/num_3.mp3',
+      ]));
+    });
+
+    test('returns empty paths for unmapped text', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+      await service.speak('随机无关文本');
+
+      expect(service.lastSpeakResult, equals(0));
+      expect(audio.playedPaths, isEmpty);
+    });
   });
 
   group('TtsService.stop', () {
