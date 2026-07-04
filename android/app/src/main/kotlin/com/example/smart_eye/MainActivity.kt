@@ -22,6 +22,11 @@ class MainActivity : FlutterActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val isPlaying = AtomicBoolean(false)
 
+    /// Reference to the currently active MediaPlayer, so stop() can truly halt
+    /// playback instead of just flipping a flag.
+    @Volatile
+    private var currentPlayer: MediaPlayer? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -71,6 +76,7 @@ class MainActivity : FlutterActivity() {
     private fun playNext(paths: List<String>, index: Int, volume: Float) {
         if (index >= paths.size) {
             isPlaying.set(false)
+            currentPlayer = null
             return
         }
 
@@ -91,34 +97,61 @@ class MainActivity : FlutterActivity() {
             )
             player.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
             player.setVolume(volume, volume)
+            // Play at 2.0x speed for faster voice feedback.
+            player.playbackParams = player.playbackParams.apply {
+                speed = 2.0f
+            }
             player.setOnCompletionListener {
                 it.release()
                 afd?.close()
+                // Clear reference before advancing to next clip.
+                if (currentPlayer === it) {
+                    currentPlayer = null
+                }
                 playNext(paths, index + 1, volume)
             }
             player.setOnErrorListener { mp, what, extra ->
                 android.util.Log.e("SmartEye", "MediaPlayer error: what=$what extra=$extra for $path")
                 mp.release()
                 afd?.close()
+                if (currentPlayer === mp) {
+                    currentPlayer = null
+                }
                 // Try to continue with the next clip.
                 playNext(paths, index + 1, volume)
                 true
             }
             player.prepare()
+            // Track the active player so stop() can truly halt it.
+            currentPlayer = player
             player.start()
         } catch (e: Exception) {
             android.util.Log.e("SmartEye", "Failed to play asset $path: ${e.message}")
             afd?.close()
             player.release()
+            if (currentPlayer === player) {
+                currentPlayer = null
+            }
             playNext(paths, index + 1, volume)
         }
     }
 
+    /// Truly stops and releases the active MediaPlayer.
+    /// Previous implementation only flipped a flag, which caused audio overlap
+    /// when a new speak() call started before the old clip finished.
     private fun stopPlayback() {
-        // A simple implementation: we cannot easily reach the active player from here,
-        // so we set the flag to false. New play requests stop any previous playback by
-        // requesting audio focus implicitly through prepare/start.
         isPlaying.set(false)
+        currentPlayer?.let { p ->
+            try {
+                if (p.isPlaying) {
+                    p.stop()
+                }
+                p.release()
+            } catch (e: Exception) {
+                android.util.Log.e("SmartEye", "stopPlayback error: ${e.message}")
+            }
+            currentPlayer = null
+        }
     }
 
     override fun onDestroy() {

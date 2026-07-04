@@ -43,3 +43,8 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // Chinese text recognition model for ML Kit (required for platform detection)
+    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
+}

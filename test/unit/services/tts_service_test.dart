@@ -44,6 +44,32 @@ void main() {
     });
   });
 
+  group('TtsService.formatMealCodeWithPlatform', () {
+    test('formats with platform name', () {
+      final service = TtsService();
+      expect(
+        service.formatMealCodeWithPlatform('#18', '淘宝闪购'),
+        equals('淘宝闪购 18 号'),
+      );
+    });
+
+    test('formats without platform when null', () {
+      final service = TtsService();
+      expect(
+        service.formatMealCodeWithPlatform('#18', null),
+        equals('18 号'),
+      );
+    });
+
+    test('formats without platform when empty', () {
+      final service = TtsService();
+      expect(
+        service.formatMealCodeWithPlatform('#18', ''),
+        equals('18 号'),
+      );
+    });
+  });
+
   group('TtsService.initialize', () {
     test('returns true when audio service is ready', () async {
       final audio = MockAudioService();
@@ -68,16 +94,15 @@ void main() {
       final audio = MockAudioService();
       final service = TtsService(audioService: audio);
       await service.initialize();
-      await service.speak('取餐码是 井 15');
+      await service.speak('15 号');
 
       expect(service.lastSpeakResult, equals(1));
       expect(
         audio.playedPaths,
         equals([
-          'assets/audio/prefix.mp3',
-          'assets/audio/jing.mp3',
           'assets/audio/num_1.mp3',
           'assets/audio/num_5.mp3',
+          'assets/audio/hao.mp3',
         ]),
       );
     });
@@ -140,11 +165,52 @@ void main() {
 
       expect(service.lastSpeakResult, equals(1));
       expect(audio.playedPaths, equals([
-        'assets/audio/prefix.mp3',
-        'assets/audio/jing.mp3',
         'assets/audio/num_1.mp3',
         'assets/audio/num_2.mp3',
         'assets/audio/num_3.mp3',
+        'assets/audio/hao.mp3',
+      ]));
+    });
+
+    test('maps platform name + meal code to platform clips', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+      await service.speak('淘宝闪购 18 号');
+
+      expect(service.lastSpeakResult, equals(1));
+      expect(audio.playedPaths, equals([
+        'assets/audio/taobao.mp3',
+        'assets/audio/num_1.mp3',
+        'assets/audio/num_8.mp3',
+        'assets/audio/hao.mp3',
+      ]));
+    });
+
+    test('maps Meituan platform name to meituan clip', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+      await service.speak('美团外卖 65 号');
+
+      expect(audio.playedPaths, equals([
+        'assets/audio/meituan.mp3',
+        'assets/audio/num_6.mp3',
+        'assets/audio/num_5.mp3',
+        'assets/audio/hao.mp3',
+      ]));
+    });
+
+    test('maps unknown platform without platform clip', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+      await service.speak('15 号');
+
+      expect(audio.playedPaths, equals([
+        'assets/audio/num_1.mp3',
+        'assets/audio/num_5.mp3',
+        'assets/audio/hao.mp3',
       ]));
     });
 

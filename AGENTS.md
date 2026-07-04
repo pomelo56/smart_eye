@@ -174,6 +174,7 @@ smart_eye/
 |------|---------|
 | OCR 识别率低 | 检查 `camera_controller` 分辨率设置 → 检查对焦模式 → 检查图像预处理 |
 | 语音不播报 | 检查 `assets/audio/` 是否已在 `pubspec.yaml` 注册 → 确认 `TtsService._mapTextToAssets()` 包含目标文本 → 确认 Android `AssetManager` 路径使用 `flutter_assets/<asset-key>` → 检查媒体音量 |
+| 音频叠加 | `speak()` 是 fire-and-forget，连续调用会重叠。**正确方案**: 每次 `speak()` 前先 `await _ttsService.stop()`。禁止用 `delay` 来「等待」音频完成（时长不确定）。参见 PROJECT.md KI-001 |
 | 相机黑屏 | 检查 Android 权限（Camera） → 检查 `Surface` 初始化时序 → 检查生命周期绑定 |
 | 手势不响应 | 检查 `GestureDetector` 层级 → 检查 `Semantics` 是否拦截事件 |
 | 测试失败 | 检查是否先写测试再看失败 → 检查测试是否用真实代码而非 mock |

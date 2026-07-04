@@ -46,6 +46,7 @@
 | 距离反馈音（倒车雷达） | 盲人无法判断手机是否对准小票 | 需求审查确认 | 2026-06-30 |
 | 无线 ADB 测试方法 | MacBook Air 无 USB 接口，使用 `adb pair` + `adb connect` 进行无线调试安装 | 实机测试验证 | 2026-07-02 |
 | flutter_assets 路径陷阱 | Android AssetManager 需要 `flutter_assets/` 前缀才能找到 Flutter 打包的 asset 文件 | 实机测试验证 | 2026-07-02 |
+| 音频叠加问题 | `speak()` 是 fire-and-forget（不等待音频完成），如果连续调用两个 `speak()` 会出现声音重叠。不能用 `delay + stop()` 来「修复」，因为音频时长不确定。正确方案：只保留一个启动语音，或合并到一个连续播报中。 | 实机测试验证（重复踩坑 2 次） | 2026-07-04 |
 
 ---
 

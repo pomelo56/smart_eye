@@ -82,3 +82,7 @@ data/*.mov
 # Logs
 *.log
 logs/
+
+# Local work files / design assets
+.workbuddy/
+design-assets/

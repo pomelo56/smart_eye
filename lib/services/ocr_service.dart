@@ -1,14 +1,43 @@
 /// Service for extracting and validating meal codes from OCR text.
 ///
-/// Supports the format `#` + 1-3 digits (e.g., `#15`) used by Meituan.
-/// Implements multi-frame validation (2 consecutive matches required)
-/// and a 5-second cooldown to prevent duplicate announcements.
+/// Supports multiple delivery platforms:
+/// - 美团外卖 (Meituan): `#65 美团外卖`
+/// - 饿了么 (Ele.me): `[ 饿了么 ] #2`
+/// - 京东外卖 (JD Takeout): `#6 京东外卖`
+/// - 淘宝闪购 (Taobao Flash): `#18 淘宝闪购`
+///
+/// The pickup code and platform name always appear together on the receipt.
+/// We use proximity-based detection: find the platform keyword closest to
+/// the pickup code to avoid false matches from footer text like
+/// "登录饿了么商家版".
+///
+/// Single-frame confirmation with 5-second cooldown to prevent duplicates.
 class OcrService {
-  static final _mealCodeRegex = RegExp(r'#(\d{1,3})');
+  /// Matches `#` followed by 1-4 digits (covers all major platforms).
+  static final _mealCodeRegex = RegExp(r'#(\d{1,4})');
 
-  String? _pendingCode;
-  String? _confirmedCode;
-  DateTime? _confirmationTime;
+  /// Platform detection rules, ordered by priority (most specific first).
+  /// Short keywords like "闪购" are excluded to avoid false matches when
+  /// multiple receipts are in the same frame.
+  static const _platformRules = <_PlatformRule>[
+    _PlatformRule('淘宝闪购', '淘宝闪购'),
+    _PlatformRule('京东外卖', '京东外卖'),
+    _PlatformRule('京东', '京东外卖'),
+    _PlatformRule('美团外卖', '美团外卖'),
+    _PlatformRule('美团', '美团外卖'),
+    _PlatformRule('饿了么', '饿了么'),
+  ];
+
+  /// Fuzzy regex for JD Takeout: "京" + 0-2 chars + "外卖".
+  /// OCR on thermal paper often misreads "京东外卖" as "京不外卖" etc.
+  static final _jdFuzzyRegex = RegExp(r'京.{0,2}外卖');
+
+  /// Per-code cooldown map: code → expiry time.
+  /// Allows detecting new codes while suppressing repeats.
+  final Map<String, DateTime> _cooldownMap = {};
+
+  /// Cooldown duration: 5 seconds per code.
+  static const _cooldownDuration = Duration(seconds: 5);
 
   /// Extracts all meal codes from the given text.
   List<String> extractMealCodes(String text) {
@@ -18,41 +47,121 @@ class OcrService {
         .toList();
   }
 
-  /// Processes a new frame for multi-frame validation.
+  /// Selects the best meal code from a list of candidates.
   ///
-  /// Returns the confirmed code only when two consecutive frames match.
-  /// Returns null otherwise.
-  String? processFrame(String? code) {
-    if (code == null) {
-      _pendingCode = null;
-      return null;
+  /// When OCR detects multiple codes (e.g. `#1` from order number and `#18`
+  /// from the actual pickup code), we pick the one with the most digits,
+  /// because the real pickup code is usually longer than accidental matches
+  /// from long order numbers.
+  ///
+  /// If multiple codes have the same length, returns the first one.
+  String? selectBestCode(List<String> codes) {
+    if (codes.isEmpty) return null;
+    if (codes.length == 1) return codes.first;
+
+    String best = codes.first;
+    for (final code in codes.skip(1)) {
+      if (code.length > best.length) {
+        best = code;
+      }
+    }
+    return best;
+  }
+
+  /// Detects which delivery platform the text belongs to.
+  ///
+  /// Uses proximity-based detection: scans the text for each platform keyword
+  /// and returns the one whose position is closest to the pickup code.
+  /// This prevents misclassification when a receipt mentions another platform
+  /// in its footer (e.g. 淘宝闪购 receipt says "登录饿了么商家版").
+  ///
+  /// Falls back to priority-ordered full-text search if no code is found
+  /// or no keyword is near the code.
+  String? detectPlatform(String text, {String? nearCode}) {
+    // If we have a code, try proximity-based detection first.
+    if (nearCode != null) {
+      final codeIndex = text.indexOf(nearCode);
+      if (codeIndex >= 0) {
+        String? bestPlatform;
+        // Tight window: platform name must be within 8 chars of the code.
+        // This prevents matching a platform keyword from an adjacent receipt.
+        const maxDistance = 8;
+        int bestDistance = maxDistance + 1;
+        for (final rule in _platformRules) {
+          int searchFrom = 0;
+          while (true) {
+            final idx = text.indexOf(rule.keyword, searchFrom);
+            if (idx < 0) break;
+            final distance = (idx - codeIndex).abs();
+            if (distance < bestDistance) {
+              bestDistance = distance;
+              bestPlatform = rule.platform;
+            }
+            searchFrom = idx + rule.keyword.length;
+          }
+        }
+        // Fuzzy match for JD Takeout (OCR may misread "京东外卖" as "京不外卖").
+        if (bestPlatform == null) {
+          for (final match in _jdFuzzyRegex.allMatches(text)) {
+            final distance = (match.start - codeIndex).abs();
+            if (distance < bestDistance) {
+              bestDistance = distance;
+              bestPlatform = '京东外卖';
+            }
+          }
+        }
+        if (bestPlatform != null) return bestPlatform;
+      }
     }
 
-    if (_pendingCode == null) {
-      // First frame after reset
-      _pendingCode = code;
-      return null;
+    // Fallback: priority-ordered full-text search.
+    for (final rule in _platformRules) {
+      if (text.contains(rule.keyword)) {
+        return rule.platform;
+      }
     }
-
-    if (_pendingCode == code) {
-      // Two consecutive frames match
-      _confirmedCode = code;
-      _confirmationTime = DateTime.now();
-      _pendingCode = null; // Reset to prevent immediate re-confirmation
-      return code;
+    // Fuzzy fallback for JD Takeout.
+    if (_jdFuzzyRegex.hasMatch(text)) {
+      return '京东外卖';
     }
-
-    // Mismatch: reset
-    _pendingCode = null;
     return null;
   }
 
-  /// Checks if the given code is within the 5-second cooldown period.
-  bool isInCooldown(String code) {
-    if (_confirmedCode != code || _confirmationTime == null) {
-      return false;
+  /// Processes a new frame for validation.
+  ///
+  /// Returns the code immediately if not in cooldown, null otherwise.
+  String? processFrame(String? code) {
+    if (code == null) return null;
+
+    if (!_isInCooldown(code)) {
+      _cooldownMap[code] = DateTime.now().add(_cooldownDuration);
+      return code;
     }
-    final elapsed = DateTime.now().difference(_confirmationTime!);
-    return elapsed < const Duration(seconds: 5);
+    return null;
   }
+
+  /// Checks if the given code is within the cooldown period.
+  bool _isInCooldown(String code) {
+    final expiry = _cooldownMap[code];
+    if (expiry == null) return false;
+    return DateTime.now().isBefore(expiry);
+  }
+
+  /// Public cooldown check.
+  bool isInCooldown(String code) => _isInCooldown(code);
+
+  /// Resets the confirmation state and cooldown.
+  ///
+  /// Called when the user requests a re-scan via triple-tap.
+  void reset() {
+    _cooldownMap.clear();
+  }
+}
+
+/// A platform detection rule pairing a keyword to a display name.
+class _PlatformRule {
+  final String keyword;
+  final String platform;
+
+  const _PlatformRule(this.keyword, this.platform);
 }

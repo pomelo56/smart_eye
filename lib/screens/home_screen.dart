@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/scan_result.dart';
 import '../services/file_logger.dart';
 import '../services/history_service.dart';
 import '../services/ocr_service.dart';
@@ -27,15 +28,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late TtsService _ttsService;
   late HistoryService _historyService;
   final OcrService _ocrService = OcrService();
-  final TextRecognizer _textRecognizer = TextRecognizer();
+  final TextRecognizer _textRecognizer =
+      TextRecognizer(script: TextRecognitionScript.chinese);
   final FileLogger _logger = FileLogger.instance;
 
   bool _isCameraReady = false;
   bool _isProcessing = false;
+  bool _isAnnouncing = false; // true while announcing a code; pauses scanning
   String? _lastAnnouncedCode;
+  String? _lastDetectedPlatform;
   Timer? _scanTimer;
   bool _feedbackBusy = false;
   DateTime? _ocrLogTimer;
+  DateTime? _lastBeepTime; // cooldown for distance feedback beeps
 
   static const _tutorialKey = 'has_seen_tutorial_v4';
 
@@ -65,12 +70,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final prefs = await SharedPreferences.getInstance();
     _historyService = HistoryService(prefs: prefs);
 
-    await _ttsService.speak('欢迎使用慧眼');
-
-    // Wait for startup voice to finish before tutorial
-    await Future.delayed(const Duration(seconds: 2));
-    await _ttsService.stop();
-
     await _checkFirstLaunch();
     await _initCameraWithRetry();
 
@@ -82,7 +81,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final prefs = await SharedPreferences.getInstance();
       final hasSeen = prefs.getBool(_tutorialKey) ?? false;
       if (!hasSeen) {
-        await Future.delayed(const Duration(seconds: 1));
+        // First launch: full tutorial
+        await Future.delayed(const Duration(milliseconds: 500));
         await _ttsService.speak(
           '欢迎使用慧眼。将手机摄像头对准外卖袋上的打印小票，'
           '应用会自动识别取餐码并播报。单击屏幕重听，三击重新识别，'
@@ -90,6 +90,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
         await prefs.setBool(_tutorialKey, true);
         _log('教程已播报');
+        // Wait for tutorial to finish before camera starts.
+        // Tutorial is ~8 seconds at 1.3x speed; 2s was not enough.
+        await Future.delayed(const Duration(seconds: 8));
+      } else {
+        // Subsequent launches: short confirmation
+        await _ttsService.speak('欢迎使用慧眼');
+        await Future.delayed(const Duration(seconds: 1));
       }
     } catch (e) {
       _log('教程错误: $e');
@@ -134,7 +141,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     _cameraController = CameraController(
       backCamera,
-      ResolutionPreset.medium,
+      ResolutionPreset.high,
       enableAudio: false,
     );
 
@@ -161,7 +168,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _scanFrame() async {
-    if (_isProcessing ||
+    // Skip scanning while announcing to prevent audio overlap.
+    if (_isAnnouncing ||
+        _isProcessing ||
         _cameraController == null ||
         !_cameraController!.value.isInitialized) {
       return;
@@ -179,30 +188,133 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (await file.exists()) await file.delete();
       } catch (_) {}
 
-      final hasText = recognizedText.text.trim().isNotEmpty;
-      if (hasText) {
-        await _playDistanceFeedback(slow: true);
-        // Log raw OCR text every 10 seconds for debugging (avoid spam)
-        if (_ocrLogTimer == null ||
-            DateTime.now().difference(_ocrLogTimer!) >
-                const Duration(seconds: 10)) {
-          _log('OCR: ${recognizedText.text.trim().length}字 '
-              '${recognizedText.text.trim().substring(0, recognizedText.text.trim().length > 50 ? 50 : recognizedText.text.trim().length)}');
-          _ocrLogTimer = DateTime.now();
-        }
+      final text = recognizedText.text.trim();
+      final hasText = text.isNotEmpty;
+
+      // Always log OCR result every 5 seconds
+      if (_ocrLogTimer == null ||
+          DateTime.now().difference(_ocrLogTimer!) >
+              const Duration(seconds: 5)) {
+        _log('OCR: ${hasText ? '${text.length}字 ${text.substring(0, text.length > 50 ? 50 : text.length)}' : '无文字'}');
+        _ocrLogTimer = DateTime.now();
       }
 
       final codes = _ocrService.extractMealCodes(recognizedText.text);
-      if (codes.isNotEmpty) {
-        await _playDistanceFeedback(slow: false);
 
-        final confirmed = _ocrService.processFrame(codes.first);
-        if (confirmed != null && !_ocrService.isInCooldown(confirmed)) {
-          _log('识别到取餐码: $confirmed');
-          _lastAnnouncedCode = confirmed;
-          await _historyService.add(confirmed);
-          await _ttsService
-              .speak('取餐码是 ${_ttsService.formatMealCode(confirmed)}');
+      if (codes.isEmpty) {
+        // No codes found but text detected → play scanning prompt.
+        if (hasText) {
+          _log('codes=[] → 识别中提示');
+          await _playScanningPrompt();
+        }
+      } else {
+        // Single or multi-code: find each code's containing block for
+        // accurate per-receipt platform detection.
+        final results = <ScanResult>[];
+        double? minX, minY, maxX, maxY;
+
+        // Compute overall text bounds from all blocks.
+        for (final block in recognizedText.blocks) {
+          final box = block.boundingBox;
+          if (minX == null || box.left < minX) minX = box.left;
+          if (minY == null || box.top < minY) minY = box.top;
+          if (maxX == null || box.right > maxX) maxX = box.right;
+          if (maxY == null || box.bottom > maxY) maxY = box.bottom;
+        }
+        final textBounds = (minX != null && minY != null && maxX != null && maxY != null)
+            ? Rect.fromLTRB(minX, minY, maxX, maxY)
+            : Rect.zero;
+
+        // For each code, find its block, position, and platform.
+        for (final code in codes) {
+          // Find the block containing this code.
+          String? blockText;
+          Rect? codeBox;
+          for (final block in recognizedText.blocks) {
+            if (block.text.contains(code) ||
+                block.text.contains(code.replaceFirst('#', ''))) {
+              codeBox = block.boundingBox;
+              blockText = block.text;
+              break;
+            }
+          }
+          if (codeBox == null || blockText == null) continue;
+
+          final center = Offset(
+            (codeBox.left + codeBox.right) / 2,
+            (codeBox.top + codeBox.bottom) / 2,
+          );
+          final posLabel = computePositionLabel(center, textBounds);
+          // Detect platform using ONLY the code's own block text,
+          // preventing cross-receipt misidentification.
+          final platform = _ocrService.detectPlatform(blockText, nearCode: code);
+
+          results.add(ScanResult(
+            code: code,
+            platform: platform,
+            positionLabel: posLabel,
+            center: center,
+          ));
+        }
+
+        if (results.isEmpty) {
+          await _playScanningPrompt();
+        } else {
+          // Sort by screen position: top-to-bottom, then left-to-right.
+          results.sort((a, b) {
+            final yDiff = a.center.dy.compareTo(b.center.dy);
+            if (yDiff.abs() > 20) return yDiff;
+            return a.center.dx.compareTo(b.center.dx);
+          });
+
+          if (results.length == 1) {
+            // Single code flow.
+            final r = results.first;
+            final platformLabel = r.platform ?? '未知';
+            _log('codes=$codes platform=$platformLabel');
+            final confirmed = _ocrService.processFrame(r.code);
+            _log('confirmed=$confirmed cool=${_ocrService.isInCooldown(r.code)}');
+            if (confirmed != null) {
+              _log('识别到取餐码: ${r.code} ($platformLabel)');
+              _lastAnnouncedCode = confirmed;
+              _lastDetectedPlatform = r.platform;
+              await _historyService.add(confirmed);
+              _isAnnouncing = true;
+              await _ttsService.stop();
+              await _ttsService.speak(
+                  _ttsService.formatMealCodeWithPlatform(confirmed, r.platform));
+              await Future.delayed(const Duration(milliseconds: 3000));
+              _isAnnouncing = false;
+            }
+          } else {
+            // Multi-code flow.
+            _log('codes=$codes → 多码检测');
+            final firstCode = results.first.code;
+            final confirmed = _ocrService.processFrame(firstCode);
+            if (confirmed != null) {
+              for (final r in results.skip(1)) {
+                _ocrService.processFrame(r.code);
+              }
+
+              final summary = results
+                  .map((r) => '${r.code}(${r.platform ?? '?'})${r.positionLabel}')
+                  .join(' ');
+              _log('多码播报: $summary');
+
+              _lastAnnouncedCode = results.first.code;
+              _lastDetectedPlatform = results.first.platform;
+              for (final r in results) {
+                await _historyService.add(r.code);
+              }
+
+              _isAnnouncing = true;
+              await _ttsService.stop();
+              await _ttsService.speakMultiCode(results);
+              final estimatedMs = 1200 + results.length * 4 * 400;
+              await Future.delayed(Duration(milliseconds: estimatedMs));
+              _isAnnouncing = false;
+            }
+          }
         }
       }
     } catch (e) {
@@ -212,9 +324,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// Plays the "识别中，手机请稳一些" prompt with cooldown.
+  Future<void> _playScanningPrompt() async {
+    final now = DateTime.now();
+    if (_lastBeepTime != null &&
+        now.difference(_lastBeepTime!) < const Duration(seconds: 8)) {
+      return;
+    }
+    _lastBeepTime = now;
+    await _playDistanceFeedback(slow: true);
+    await _ttsService.speakScanning();
+  }
+
   Future<void> _playDistanceFeedback({required bool slow}) async {
     if (_feedbackBusy) return;
+    // Cooldown: at most one beep per 8 seconds to avoid audio spam
+    // when the phone is unsteady.
+    final now = DateTime.now();
+    if (_lastBeepTime != null &&
+        now.difference(_lastBeepTime!) < const Duration(seconds: 8)) {
+      return;
+    }
     _feedbackBusy = true;
+    _lastBeepTime = now;
 
     // Stop any ongoing playback before playing new feedback
     await _ttsService.stop();
@@ -229,9 +361,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _replayLast() async {
     _log('手势: 单击重听');
+    await _ttsService.stop();
     if (_lastAnnouncedCode != null) {
-      await _ttsService
-          .speak('取餐码是 ${_ttsService.formatMealCode(_lastAnnouncedCode!)}');
+      await _ttsService.speak(_ttsService
+          .formatMealCodeWithPlatform(_lastAnnouncedCode!, _lastDetectedPlatform));
     } else {
       await _ttsService.speak('没有识别到取餐码');
     }
@@ -239,13 +372,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _restartScan() async {
     _log('手势: 三击重新识别');
-    _ocrService.processFrame(null);
+    await _ttsService.stop();
+    _ocrService.reset();
     _lastAnnouncedCode = null;
+    _lastDetectedPlatform = null;
+    _isAnnouncing = false;
     await _ttsService.speak('没有识别到取餐码，请重新对准小票');
+    // Wait for the prompt to finish before scanning resumes.
+    await Future.delayed(const Duration(seconds: 3));
   }
 
   Future<void> _announceHistory() async {
     _log('手势: 上滑历史');
+    await _ttsService.stop();
     try {
       final records = await _historyService.getRecent();
       if (records.isEmpty) {
@@ -271,6 +410,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _announceHelp() async {
     _log('手势: 下滑帮助');
+    await _ttsService.stop();
     await _ttsService.speak('操作帮助');
   }
 
