@@ -9,6 +9,25 @@
 
 ---
 
+## [0.5.0] — 2026-07-04
+
+### Added
+- 原生音频完成回调：Kotlin 侧播放完成后通过 MethodChannel 通知 Dart 侧，`playAssets` 阻塞到播放完成
+- 历史记录分条播放：`speakHistory` 方法逐条播放"第N条 65号"
+- 新增音频素材：history.mp3、di.mp3、tiao.mp3、no_history.mp3
+- `speakNoHistory` 方法：无历史记录时播放专用提示音
+
+### Changed
+- `_extractCode` 收紧匹配规则：仅匹配"数字+号"、"井+数字"、"平台名+数字"模式，不再提取任意文本中的数字
+- `OcrService.proximityMaxDistance` 提取为命名常量（值为8）
+- 首次启动教程不再需要 `Future.delayed` 等待，`speak` 自动阻塞到播放完成
+
+### Removed
+- `Future.delayed` 时序 hack：所有播报后的固定等待全部移除，改为原生回调驱动
+- 冗余音频文件：prefix.mp3、jing.mp3（不再使用的旧格式音频）
+
+---
+
 ## [0.4.0] — 2026-07-04
 
 ### Added

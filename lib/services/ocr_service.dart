@@ -28,6 +28,11 @@ class OcrService {
     _PlatformRule('饿了么', '饿了么'),
   ];
 
+  /// Maximum character distance between a code and its platform keyword.
+  /// Only keywords within this window are considered, preventing
+  /// cross-receipt misidentification when multiple receipts are in frame.
+  static const proximityMaxDistance = 8;
+
   /// Fuzzy regex for JD Takeout: "京" + 0-2 chars + "外卖".
   /// OCR on thermal paper often misreads "京东外卖" as "京不外卖" etc.
   static final _jdFuzzyRegex = RegExp(r'京.{0,2}外卖');
@@ -83,9 +88,10 @@ class OcrService {
       final codeIndex = text.indexOf(nearCode);
       if (codeIndex >= 0) {
         String? bestPlatform;
-        // Tight window: platform name must be within 8 chars of the code.
-        // This prevents matching a platform keyword from an adjacent receipt.
-        const maxDistance = 8;
+        // Tight window: platform name must be within proximityMaxDistance
+        // chars of the code. This prevents matching a platform keyword from
+        // an adjacent receipt.
+        const maxDistance = proximityMaxDistance;
         int bestDistance = maxDistance + 1;
         for (final rule in _platformRules) {
           int searchFrom = 0;

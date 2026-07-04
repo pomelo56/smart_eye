@@ -18,9 +18,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  * third-party apps.  All speech prompts are pre-recorded and shipped as assets.
  */
 class MainActivity : FlutterActivity() {
-    private val channel = "com.smart_eye/audio"
+    private val channelName = "com.smart_eye/audio"
     private val mainHandler = Handler(Looper.getMainLooper())
     private val isPlaying = AtomicBoolean(false)
+    private lateinit var methodChannel: MethodChannel
 
     /// Reference to the currently active MediaPlayer, so stop() can truly halt
     /// playback instead of just flipping a flag.
@@ -30,10 +31,11 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        MethodChannel(
+        methodChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
-            channel
-        ).setMethodCallHandler { call, result ->
+            channelName
+        )
+        methodChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "playAssets" -> {
                     val paths = call.argument<List<String>>("paths") ?: emptyList()
@@ -77,6 +79,8 @@ class MainActivity : FlutterActivity() {
         if (index >= paths.size) {
             isPlaying.set(false)
             currentPlayer = null
+            // Notify Dart side that all clips have finished playing.
+            methodChannel.invokeMethod("onPlaybackComplete", null)
             return
         }
 

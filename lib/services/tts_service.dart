@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../models/meal_code.dart';
 import '../models/scan_result.dart';
 import 'audio_service.dart';
 
@@ -81,6 +82,39 @@ class TtsService {
   Future<void> speakScanning() async {
     if (!_isInitialized) return;
     await _audioService.playAssets(['assets/audio/scanning.mp3']);
+  }
+
+  /// Announces history records one by one.
+  ///
+  /// Format: "历史记录。第1条 65号。第2条 2号。"
+  /// Each record is played sequentially; [playAssets] blocks until done.
+  Future<void> speakHistory(List<MealCode> records) async {
+    if (!_isInitialized || records.isEmpty) return;
+
+    final clips = <String>[];
+    clips.add('assets/audio/history.mp3');
+
+    for (var i = 0; i < records.length; i++) {
+      // "第 N 条"
+      clips.add('assets/audio/di.mp3');
+      clips.add('assets/audio/num_${i + 1}.mp3');
+      clips.add('assets/audio/tiao.mp3');
+
+      // Digits + "号"
+      final digits = records[i].code.replaceFirst('#', '');
+      for (final d in digits.split('')) {
+        clips.add('assets/audio/num_$d.mp3');
+      }
+      clips.add('assets/audio/hao.mp3');
+    }
+
+    await _audioService.playAssets(clips);
+  }
+
+  /// Plays a fixed "no history" prompt.
+  Future<void> speakNoHistory() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/no_history.mp3']);
   }
 
   /// Announces multiple meal codes with platforms and positions.
@@ -212,12 +246,28 @@ class TtsService {
 
   /// Extracts the digit portion from a meal-code utterance.
   ///
-  /// Returns null if no digits are found.
+  /// Only matches patterns that look like meal codes:
+  /// - "平台名 数字 号" (e.g. "美团外卖 65 号")
+  /// - "数字 号" (e.g. "18 号")
+  /// - "井 数字" (e.g. "井 15")
+  ///
+  /// Returns null if no meal-code-like pattern is found, preventing
+  /// arbitrary text containing digits from being misinterpreted.
   String? _extractCode(String text) {
-    // Remove known Chinese words and the hash symbol, keep digits.
-    final digits = text
-        .replaceAll(RegExp(r'[^0-9]'), '')
-        .trim();
-    return digits.isEmpty ? null : digits;
+    // Pattern 1: "平台名 数字 号" or "数字 号"
+    final match1 = RegExp(r'(\d{1,4})\s*号').firstMatch(text);
+    if (match1 != null) return match1.group(1);
+
+    // Pattern 2: "井 数字" (legacy format)
+    final match2 = RegExp(r'井\s*(\d{1,4})').firstMatch(text);
+    if (match2 != null) return match2.group(1);
+
+    // Pattern 3: "平台名 数字" (no 号 suffix)
+    final match3 = RegExp(
+            r'(?:美团外卖|饿了么|京东外卖|淘宝闪购)\s*(\d{1,4})')
+        .firstMatch(text);
+    if (match3 != null) return match3.group(1);
+
+    return null;
   }
 }

@@ -90,13 +90,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
         await prefs.setBool(_tutorialKey, true);
         _log('教程已播报');
-        // Wait for tutorial to finish before camera starts.
-        // Tutorial is ~8 seconds at 1.3x speed; 2s was not enough.
-        await Future.delayed(const Duration(seconds: 8));
       } else {
         // Subsequent launches: short confirmation
         await _ttsService.speak('欢迎使用慧眼');
-        await Future.delayed(const Duration(seconds: 1));
       }
     } catch (e) {
       _log('教程错误: $e');
@@ -283,7 +279,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               await _ttsService.stop();
               await _ttsService.speak(
                   _ttsService.formatMealCodeWithPlatform(confirmed, r.platform));
-              await Future.delayed(const Duration(milliseconds: 3000));
               _isAnnouncing = false;
             }
           } else {
@@ -310,8 +305,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               _isAnnouncing = true;
               await _ttsService.stop();
               await _ttsService.speakMultiCode(results);
-              final estimatedMs = 1200 + results.length * 4 * 400;
-              await Future.delayed(Duration(milliseconds: estimatedMs));
               _isAnnouncing = false;
             }
           }
@@ -353,9 +346,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final code = slow ? 'beep_slow' : 'beep_fast';
     await _ttsService.speak(code);
-
-    // Longer cooldown to prevent stacking (1.5s for slow, 1s for fast)
-    await Future.delayed(Duration(milliseconds: slow ? 1500 : 1000));
     _feedbackBusy = false;
   }
 
@@ -378,8 +368,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _lastDetectedPlatform = null;
     _isAnnouncing = false;
     await _ttsService.speak('没有识别到取餐码，请重新对准小票');
-    // Wait for the prompt to finish before scanning resumes.
-    await Future.delayed(const Duration(seconds: 3));
   }
 
   Future<void> _announceHistory() async {
@@ -388,23 +376,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       final records = await _historyService.getRecent();
       if (records.isEmpty) {
-        await _ttsService.speak('没有识别记录');
+        await _ttsService.speakNoHistory();
         return;
       }
-
-      final buffer = StringBuffer('最近识别记录：');
-      for (var i = 0; i < records.length; i++) {
-        final record = records[i];
-        buffer.write('第 ${i + 1} 条，取餐码 ${record.code}，${record.timeDescription}');
-        if (i < records.length - 1) {
-          buffer.write('；');
-        }
-      }
-
-      await _ttsService.speak(buffer.toString());
+      await _ttsService.speakHistory(records);
     } catch (e) {
       _log('历史错误: $e');
-      await _ttsService.speak('历史记录读取失败');
     }
   }
 
