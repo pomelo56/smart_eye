@@ -21,8 +21,11 @@
 ### Changed
 - HomeScreen `_scanFrame` 在 `codes.isEmpty` 分支先检查平台关键词，命中则播"发现外卖"提示，否则保持原有"识别中"提示
 
-### Note
-- v0.6.0 仅交付代码 + 单元测试 + 文档。3 个新音频文件（`faxian_waimai.mp3` / `shibiezhong.mp3` / `please_steady.mp3`）需后续录制后放入 `assets/audio/`，`pubspec.yaml` 已使用整目录声明无需修改。
+### Added (Assets)
+- `assets/audio/faxian_waimai.mp3`：「发现外卖」（macOS `say` + `afconvert` 生成，与现有 `num_*.mp3` 同 `ftypmp42` 容器）
+- `assets/audio/shibiezhong.mp3`：「识别中」
+- `assets/audio/please_steady.mp3`：「手机请稳一些」
+- `pubspec.yaml` 已使用 `assets/audio/` 整目录声明，无需额外注册
 
 ---
 
