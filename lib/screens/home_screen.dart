@@ -55,9 +55,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _log(String msg) {
     _logger.write('INFO', msg);
-    if (mounted) {
-      setState(() {}); // refresh screen buffer
-    }
+    // The screen overlay listens to FileLogger.screenBufferNotifier,
+    // so no setState is needed here.
   }
 
   @override
@@ -151,7 +150,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
 
     try {
-      await _cameraController!.initialize().timeout(const Duration(seconds: 15));
+      await _cameraController!
+          .initialize()
+          .timeout(const Duration(seconds: 15));
       _log('相机就绪 (${backCamera.lensDirection})');
       if (mounted) {
         setState(() => _isCameraReady = true);
@@ -168,7 +169,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _startScanning() {
     _scanTimer?.cancel();
-    _scanTimer = Timer.periodic(const Duration(seconds: 2), (_) => _scanFrame());
+    _scanTimer =
+        Timer.periodic(const Duration(seconds: 2), (_) => _scanFrame());
     _log('扫描已启动 (每2秒)');
   }
 
@@ -320,12 +322,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           );
           final posLabel = computePositionLabel(center, imageBounds);
           _lastCodePosition = posLabel; // remember for direction guidance
-          _log('位置调试: code=$code center=(${center.dx.toInt()},${center.dy.toInt()}) '
+          _log(
+              '位置调试: code=$code center=(${center.dx.toInt()},${center.dy.toInt()}) '
               'upright=${uprightW.toInt()}x${uprightH.toInt()} '
               'rawImg=${imgW}x$imgH posLabel=$posLabel');
           // Detect platform using ONLY the code's own block text,
           // preventing cross-receipt misidentification.
-          final platform = _ocrService.detectPlatform(blockText, nearCode: code);
+          final platform =
+              _ocrService.detectPlatform(blockText, nearCode: code);
 
           results.add(ScanResult(
             code: code,
@@ -342,8 +346,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final now = DateTime.now();
 
         // Purge expired entries.
-        _codeCache.removeWhere(
-            (key, cached) => now.difference(cached.timestamp) > _codeCacheWindow);
+        _codeCache.removeWhere((key, cached) =>
+            now.difference(cached.timestamp) > _codeCacheWindow);
 
         // Add/update current frame's codes into the cache.
         for (final r in results) {
@@ -393,7 +397,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             final platformLabel = r.platform ?? '未知';
             _log('codes=$codes platform=$platformLabel');
             final confirmed = _ocrService.processFrame(r.code);
-            _log('confirmed=$confirmed cool=${_ocrService.isInCooldown(r.code)}');
+            _log(
+                'confirmed=$confirmed cool=${_ocrService.isInCooldown(r.code)}');
             if (confirmed != null) {
               _log('识别到取餐码: ${r.code} ($platformLabel) ${r.positionLabel}');
               _lastAnnouncedCode = confirmed;
@@ -408,16 +413,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             }
           } else {
             // Multi-code flow.
-            _log('codes=$codes effective=${effectiveResults.map((r) => r.code).toList()} → 多码检测');
+            _log(
+                'codes=$codes effective=${effectiveResults.map((r) => r.code).toList()} → 多码检测');
             // Check if ANY code is new (not in cooldown).
-            final hasNewCode = effectiveResults.any((r) => !_ocrService.isInCooldown(r.code));
+            final hasNewCode =
+                effectiveResults.any((r) => !_ocrService.isInCooldown(r.code));
             if (hasNewCode) {
               for (final r in effectiveResults) {
                 _ocrService.processFrame(r.code);
               }
 
               final summary = effectiveResults
-                  .map((r) => '${r.code}(${r.platform ?? '?'})${r.positionLabel}')
+                  .map((r) =>
+                      '${r.code}(${r.platform ?? '?'})${r.positionLabel}')
                   .join(' ');
               _log('多码播报: $summary');
 
@@ -569,8 +577,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       src.dispose();
 
       // Encode to PNG and run ML Kit on the bytes.
-      final byteData =
-          await rotated.toByteData(format: ui.ImageByteFormat.png);
+      final byteData = await rotated.toByteData(format: ui.ImageByteFormat.png);
       rotated.dispose();
       if (byteData == null) {
         return RecognizedText(text: '', blocks: []);
@@ -726,10 +733,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   child: FittedBox(
                     fit: BoxFit.cover,
                     child: SizedBox(
-                      width: _cameraController!.value.previewSize?.height ??
-                          720,
-                      height: _cameraController!.value.previewSize?.width ??
-                          1280,
+                      width:
+                          _cameraController!.value.previewSize?.height ?? 720,
+                      height:
+                          _cameraController!.value.previewSize?.width ?? 1280,
                       child: CameraPreview(_cameraController!),
                     ),
                   ),
@@ -741,21 +748,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 left: 0,
                 right: 0,
                 child: IgnorePointer(
-                  child: Container(
-                    color: Colors.black.withOpacity(0.8),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: _logger.screenBuffer
-                          .map((l) => Text(
-                                l,
-                                style: const TextStyle(
-                                    color: Colors.greenAccent, fontSize: 11),
-                              ))
-                          .toList(),
-                    ),
+                  child: ValueListenableBuilder<List<String>>(
+                    valueListenable: _logger.screenBufferNotifier,
+                    builder: (context, buffer, _) {
+                      return Container(
+                        color: Colors.black.withOpacity(0.8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: buffer
+                              .map((l) => Text(
+                                    l,
+                                    style: const TextStyle(
+                                        color: Colors.greenAccent,
+                                        fontSize: 11),
+                                  ))
+                              .toList(),
+                        ),
+                      );
+                    },
                   ),
                 ),
               ),
