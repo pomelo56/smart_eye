@@ -56,7 +56,8 @@ void main() {
       await service.add('#6');
       final records = await service.getRecent();
       expect(records.first.code, equals('#6'));
-      expect(records.map((r) => r.code).toList(), containsAll(['#2', '#3', '#4', '#5', '#6']));
+      expect(records.map((r) => r.code).toList(),
+          containsAll(['#2', '#3', '#4', '#5', '#6']));
     });
 
     test('drops records older than 24 hours', () async {

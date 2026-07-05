@@ -38,9 +38,10 @@ class TtsService {
 
   /// Initializes the audio playback service.
   ///
-  /// Always returns true because the only dependency is bundled assets.
+  /// Verifies the native audio channel is reachable. Returns true if the
+  /// bundled audio engine is ready, false otherwise.
   Future<bool> initialize() async {
-    _isInitialized = _audioService.isInitialized;
+    _isInitialized = await _audioService.initialize();
     initStatus = _isInitialized ? 'assets/ready' : 'assets/unavailable';
     debugPrint('[TTS] audio fallback initialized: $_isInitialized');
     return _isInitialized;
@@ -74,14 +75,33 @@ class TtsService {
   }
 
   /// Stops current playback.
-  Future<void> stop() async {
-    await _audioService.stop();
+  ///
+  /// Returns true if the stop command reached the native player, false
+  /// if the audio service is not initialized or the native call failed.
+  Future<bool> stop() async {
+    if (!_isInitialized) return false;
+    return _audioService.stop();
   }
 
   /// Plays the "识别中，手机请稳一些" scanning prompt.
   Future<void> speakScanning() async {
     if (!_isInitialized) return;
     await _audioService.playAssets(['assets/audio/scanning.mp3']);
+  }
+
+  /// Plays the "发现外卖，识别中，手机请稳一些" prompt.
+  ///
+  /// Triggered when the OCR result contains a delivery platform keyword
+  /// but the pickup code has not been recognized yet (5-second cooldown
+  /// is enforced by the caller).
+  Future<void> speakDetectedTakeout() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(const [
+      'assets/audio/faxian_waimai.mp3',
+      'assets/audio/shibiezhong.mp3',
+      'assets/audio/please_steady.mp3',
+    ]);
+    lastSpeakResult = 1;
   }
 
   /// Announces history records one by one.
@@ -311,8 +331,7 @@ class TtsService {
     if (match2 != null) return match2.group(1);
 
     // Pattern 3: "平台名 数字" (no 号 suffix)
-    final match3 = RegExp(
-            r'(?:美团外卖|美团闪购|饿了么|京东外卖|淘宝闪购|朴朴超市)\s*(\d{1,6})')
+    final match3 = RegExp(r'(?:美团外卖|美团闪购|饿了么|京东外卖|淘宝闪购|朴朴超市)\s*(\d{1,6})')
         .firstMatch(text);
     if (match3 != null) return match3.group(1);
 

@@ -9,6 +9,42 @@
 
 ---
 
+## [0.6.0] — 2026-07-05
+
+### Added
+- 「发现外卖」语音提示：当 OCR 识别到外卖平台关键词（美团/饿了么/京东/淘宝闪购/朴朴）但尚未识别到取餐码时，播报"发现外卖，识别中，手机请稳一些"
+- `OcrService.hasPlatformKeyword()`：检测文本中是否包含外卖平台关键词（含模糊匹配"京...外卖"）
+- `TtsService.speakDetectedTakeout()`：拼接 3 段音频播放"发现外卖 / 识别中 / 手机请稳一些"
+- `_playDetectedTakeoutPrompt()` HomeScreen 方法：5 秒冷却保护，避免手机抖动时反复触发
+- 单元测试 `ocr_platform_keyword_test.dart`：9 个测试覆盖各类平台关键词
+
+### Changed
+- HomeScreen `_scanFrame` 在 `codes.isEmpty` 分支先检查平台关键词，命中则播"发现外卖"提示，否则保持原有"识别中"提示
+
+### Added (Assets)
+- `assets/audio/faxian_waimai.mp3`：「发现外卖」（macOS `say` + `afconvert` 生成，与现有 `num_*.mp3` 同 `ftypmp42` 容器）
+- `assets/audio/shibiezhong.mp3`：「识别中」
+- `assets/audio/please_steady.mp3`：「手机请稳一些」
+- `pubspec.yaml` 已使用 `assets/audio/` 整目录声明，无需额外注册
+
+---
+
+## [0.5.1] — 2026-07-05
+
+### Fixed
+- 修复 `AudioService._isInitialized` 硬编码为 `true` 的问题：新增 `ping` 检测原生通道，真实报告音频引擎可用性
+- 修复 `AudioService.stop()` / `TtsService.stop()` 异常时无反馈的问题：现在返回 `bool`，调用者可感知停止是否成功
+- 修复 `_log()` 每次触发 `setState` 重建整棵 HomeScreen 树的问题：改用 `FileLogger.screenBufferNotifier` + `ValueListenableBuilder`
+- 修复 `OcrService._cooldownMap` 只增不减的内存泄漏：每次 `processFrame()` 自动清理过期冷却条目
+- 修复 `MethodChannel` handler 被多次注册的风险：多个 `AudioService` 实例间只注册一次回调
+
+### Changed
+- `TtsService.initialize()` 改为异步等待 `AudioService.initialize()`，确保语音服务真正就绪
+- `OcrService` 支持注入 `clock` 函数，测试中无需真实等待 5 秒冷却时间
+- 更新 `audio_service_test.dart`、`file_logger_test.dart`、`ocr_service_test.dart`、`tts_service_test.dart` 以覆盖上述修复
+
+---
+
 ## [0.5.0] — 2026-07-04
 
 ### Added

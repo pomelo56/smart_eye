@@ -1,6 +1,6 @@
 # 无线调试安装 APK
 
-> 慧眼 SmartEye — 通过 WiFi 无线连接手机安装 APK，无需 USB 数据线。
+> 慧眼 SmartEye — **APK 由 `flutter build` 程序构建**，**通过无线 ADB 安装**到手机。整个流程无需 USB 数据线、无需人工复制文件。
 
 ## 前提条件
 

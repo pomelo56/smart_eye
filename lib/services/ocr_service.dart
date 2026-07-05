@@ -16,6 +16,14 @@
 ///
 /// Single-frame confirmation with 5-second cooldown to prevent duplicates.
 class OcrService {
+  /// Creates an [OcrService].
+  ///
+  /// The optional [clock] is used in tests to control time without real
+  /// delays.
+  OcrService({DateTime Function()? clock}) : _clock = clock ?? DateTime.now;
+
+  final DateTime Function() _clock;
+
   /// Matches `#` followed by 1-6 digits (covers all major platforms including
   /// 朴朴超市's 6-digit codes).
   static final _mealCodeRegex = RegExp(r'#(\d{1,6})');
@@ -170,18 +178,25 @@ class OcrService {
   String? processFrame(String? code) {
     if (code == null) return null;
 
+    _cleanupExpiredCooldowns();
     if (!_isInCooldown(code)) {
-      _cooldownMap[code] = DateTime.now().add(_cooldownDuration);
+      _cooldownMap[code] = _clock().add(_cooldownDuration);
       return code;
     }
     return null;
+  }
+
+  /// Removes expired entries from the cooldown map to avoid unbounded growth.
+  void _cleanupExpiredCooldowns() {
+    final now = _clock();
+    _cooldownMap.removeWhere((_, expiry) => now.isAfter(expiry));
   }
 
   /// Checks if the given code is within the cooldown period.
   bool _isInCooldown(String code) {
     final expiry = _cooldownMap[code];
     if (expiry == null) return false;
-    return DateTime.now().isBefore(expiry);
+    return _clock().isBefore(expiry);
   }
 
   /// Public cooldown check.
@@ -192,6 +207,24 @@ class OcrService {
   /// Called when the user requests a re-scan via triple-tap.
   void reset() {
     _cooldownMap.clear();
+  }
+
+  /// Returns true if [text] contains any delivery platform keyword.
+  ///
+  /// Used to trigger the "发现外卖" voice prompt when the user has
+  /// aimed the camera at a takeout receipt but the pickup code has not
+  /// been fully recognized yet.
+  ///
+  /// Matches all keywords used by [detectPlatform] (e.g. 美团外卖, 饿了么,
+  /// 京东外卖, 淘宝闪购, 朴朴超市, plus the short form 美团/京东/朴朴),
+  /// as well as the fuzzy "京...外卖" variant for OCR misreadings.
+  bool hasPlatformKeyword(String text) {
+    if (text.isEmpty) return false;
+    for (final rule in _platformRules) {
+      if (text.contains(rule.keyword)) return true;
+    }
+    if (_jdFuzzyRegex.hasMatch(text)) return true;
+    return false;
   }
 }
 

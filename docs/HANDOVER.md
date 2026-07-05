@@ -240,15 +240,65 @@ assets.openFd("flutter_assets/$path")
 
 ## 8. 分支与版本控制
 
-- `master`：主开发分支，`fix/tts-init-failure` 和 `fix/audio-fallback` 已合并到 master 并删除，所有开发在 master 上进行
+- `master`：主开发分支，所有开发从 `master` 分支拉出 feature worktree，合并后删除
+- `main`（GitHub 默认分支）：`master` 合并后通过 fast-forward 同步到 GitHub `main`
 
 **新增功能**必须：
 1. 从 `master` 创建 feature 分支
-2. 使用 feature worktree
-3. 先写测试，再写实现
-4. 更新 `CHANGELOG.md`
+2. 使用 feature worktree（`git worktree add <worktree-path> -b feat/<name> master`）
+3. 先写测试，再写实现（TDD）
+4. 更新 `CHANGELOG.md` / `VERSION.md` / `PROJECT.md` / `pubspec.yaml`
 5. `flutter analyze` 零警告 + `flutter test` 全绿
 6. 提交并合并到 `master`
+7. 把 feature 分支 + 合并后的 `master` **同时推送到 GitHub 和 Gitee**
+
+### 8.1 远程仓库配置
+
+```bash
+git remote -v
+# origin    -> gitee.com:pomelo/smart_eye.git  (国内主用)
+# github    -> github.com:pomelo56/smart_eye.git  (海外镜像 / 比赛仓库)
+```
+
+### 8.2 完整发布流程
+
+```bash
+# ====== 1. 在 worktree 内开发 ======
+cd <worktree-path>
+git branch --show-current   # 确认在 feature/feat-xxx 上
+
+# 改动代码 + 测试
+flutter analyze
+flutter test test/unit/
+
+git add -A
+git commit -m "feat(xxx): description"
+
+# 同步版本号变更（pubspec / CHANGELOG / VERSION / PROJECT）
+git add pubspec.yaml CHANGELOG.md VERSION.md PROJECT.md
+git commit -m "chore(release): bump version to v0.X.0+9"
+
+git tag v0.X.0
+git push github feat/feat-xxx
+git push github v0.X.0
+
+# ====== 2. 合并到 master 并同步双仓库 ======
+cd /Users/pomelo/Project/smart_eye   # 回到主项目
+git fetch github feat/feat-xxx
+git merge feat/feat-xxx --ff-only
+git push github main
+git push origin master   # Gitee
+git push github master   # GitHub（main/master 同时存在）
+
+# ====== 3. 构建并无线安装到手机 ======
+# 详见 docs/无线调试安装APK.md
+flutter build apk --release
+adb -s 192.168.1.7:44953 install -r build/app/outputs/flutter-apk/app-release.apk
+```
+
+### 8.3 音频生成与构建集成
+
+新增语音素材时使用 `say` + `afconvert` 程序生成（详见 `docs/AUDIO_GENERATION.md`），不要录真人。生成后必须随 commit 一起推送，否则 APK 找不到资产会闪退。
 
 ---
 

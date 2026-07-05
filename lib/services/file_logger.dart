@@ -22,7 +22,16 @@ class FileLogger {
 
   /// In-memory buffer for screen display.
   final List<String> screenBuffer = [];
-  static const _maxScreenLines = 8;
+
+  /// Maximum number of lines shown on the screen overlay.
+  static const maxScreenLines = 8;
+
+  /// Notifies listeners when [screenBuffer] changes.
+  ///
+  /// Widgets can listen to this instead of rebuilding on every log write
+  /// via a full setState.
+  final ValueNotifier<List<String>> screenBufferNotifier =
+      ValueNotifier<List<String>>(const []);
 
   /// Initialize the logger. Call once at app startup.
   Future<void> initialize() async {
@@ -80,17 +89,17 @@ class FileLogger {
   /// Write a log line to both file and screen buffer.
   Future<void> write(String level, String message) async {
     final now = DateTime.now();
-    final timestamp =
-        '${now.hour.toString().padLeft(2, '0')}:'
+    final timestamp = '${now.hour.toString().padLeft(2, '0')}:'
         '${now.minute.toString().padLeft(2, '0')}:'
         '${now.second.toString().padLeft(2, '0')}';
     final line = '[$timestamp][$level] $message';
 
     // Screen buffer (for overlay display)
-    if (screenBuffer.length >= _maxScreenLines) {
+    if (screenBuffer.length >= maxScreenLines) {
       screenBuffer.removeAt(0);
     }
     screenBuffer.add(line);
+    screenBufferNotifier.value = List<String>.unmodifiable(screenBuffer);
 
     // debugPrint for logcat
     debugPrint('[慧眼] $line');

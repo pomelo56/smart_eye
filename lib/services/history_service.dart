@@ -29,12 +29,14 @@ class HistoryService {
     if (records.isNotEmpty) {
       final last = records.first;
       if (last.code == code &&
-          DateTime.now().difference(last.recognizedAt) < const Duration(seconds: 5)) {
+          DateTime.now().difference(last.recognizedAt) <
+              const Duration(seconds: 5)) {
         return;
       }
     }
 
-    records.insert(0, MealCode(code: code, recognizedAt: DateTime.now(), platform: platform));
+    records.insert(0,
+        MealCode(code: code, recognizedAt: DateTime.now(), platform: platform));
 
     while (records.length > _maxRecords) {
       records.removeLast();
@@ -65,10 +67,7 @@ class HistoryService {
 
   Future<List<MealCode>> _readRecords() async {
     final raw = _prefs.getStringList(_storageKey) ?? [];
-    return raw
-        .map(MealCode.fromStorageString)
-        .whereType<MealCode>()
-        .toList();
+    return raw.map(MealCode.fromStorageString).whereType<MealCode>().toList();
   }
 
   Future<void> _writeRecords(List<MealCode> records) async {

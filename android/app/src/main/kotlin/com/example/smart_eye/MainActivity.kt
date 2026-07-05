@@ -37,6 +37,9 @@ class MainActivity : FlutterActivity() {
         )
         methodChannel.setMethodCallHandler { call, result ->
             when (call.method) {
+                "ping" -> {
+                    result.success(true)
+                }
                 "playAssets" -> {
                     val paths = call.argument<List<String>>("paths") ?: emptyList()
                     val volume = (call.argument<Number>("volume")?.toFloat() ?: 1.0f)
