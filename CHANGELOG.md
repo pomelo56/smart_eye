@@ -9,6 +9,22 @@
 
 ---
 
+## [0.5.1] — 2026-07-05
+
+### Fixed
+- 修复 `AudioService._isInitialized` 硬编码为 `true` 的问题：新增 `ping` 检测原生通道，真实报告音频引擎可用性
+- 修复 `AudioService.stop()` / `TtsService.stop()` 异常时无反馈的问题：现在返回 `bool`，调用者可感知停止是否成功
+- 修复 `_log()` 每次触发 `setState` 重建整棵 HomeScreen 树的问题：改用 `FileLogger.screenBufferNotifier` + `ValueListenableBuilder`
+- 修复 `OcrService._cooldownMap` 只增不减的内存泄漏：每次 `processFrame()` 自动清理过期冷却条目
+- 修复 `MethodChannel` handler 被多次注册的风险：多个 `AudioService` 实例间只注册一次回调
+
+### Changed
+- `TtsService.initialize()` 改为异步等待 `AudioService.initialize()`，确保语音服务真正就绪
+- `OcrService` 支持注入 `clock` 函数，测试中无需真实等待 5 秒冷却时间
+- 更新 `audio_service_test.dart`、`file_logger_test.dart`、`ocr_service_test.dart`、`tts_service_test.dart` 以覆盖上述修复
+
+---
+
 ## [0.5.0] — 2026-07-04
 
 ### Added
