@@ -44,6 +44,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   DateTime? _ocrLogTimer;
   DateTime? _lastBeepTime; // cooldown for distance feedback beeps
   DateTime? _lastGuidanceTime; // cooldown for direction guidance
+  DateTime? _lastTakeoutPromptTime; // cooldown for "发现外卖" prompt
 
   /// Cross-frame code cache: codes seen in the last [_codeCacheWindow].
   /// When a receipt is upside down, OCR may only detect one code per frame.
@@ -243,10 +244,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final codes = _ocrService.extractMealCodes(combinedText);
 
       if (codes.isEmpty) {
-        // No codes found but text detected → play scanning prompt.
+        // No codes found but text detected → distinguish "found the
+        // delivery platform but no code yet" from "just random text".
         if (hasText) {
-          _log('codes=[] → 识别中提示');
-          await _playScanningPrompt();
+          if (_ocrService.hasPlatformKeyword(combinedText)) {
+            _log('platform keyword detected → 发现外卖提示');
+            await _playDetectedTakeoutPrompt();
+          } else {
+            _log('no platform keyword → 识别中提示');
+            await _playScanningPrompt();
+          }
         } else {
           // No text at all → receipt likely out of frame.
           // Guide the user back based on last known position.
@@ -463,6 +470,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _lastBeepTime = now;
     await _playDistanceFeedback(slow: true);
     await _ttsService.speakScanning();
+  }
+
+  /// Plays the "发现外卖，识别中，手机请稳一些" prompt with cooldown.
+  ///
+  /// Triggered when a delivery platform keyword (e.g. 美团外卖, 饿了么) is
+  /// detected in the frame but no pickup code has been recognized yet.
+  /// Has a 5-second cooldown to prevent the prompt from playing every
+  /// scan cycle.
+  Future<void> _playDetectedTakeoutPrompt() async {
+    if (_feedbackBusy || _isAnnouncing) return;
+
+    final now = DateTime.now();
+    if (_lastTakeoutPromptTime != null &&
+        now.difference(_lastTakeoutPromptTime!) < const Duration(seconds: 5)) {
+      return;
+    }
+    _lastTakeoutPromptTime = now;
+
+    _feedbackBusy = true;
+    await _ttsService.stop();
+    await _ttsService.speakDetectedTakeout();
+    _feedbackBusy = false;
   }
 
   /// Plays direction guidance when the receipt is out of frame.

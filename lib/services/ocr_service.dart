@@ -208,6 +208,24 @@ class OcrService {
   void reset() {
     _cooldownMap.clear();
   }
+
+  /// Returns true if [text] contains any delivery platform keyword.
+  ///
+  /// Used to trigger the "发现外卖" voice prompt when the user has
+  /// aimed the camera at a takeout receipt but the pickup code has not
+  /// been fully recognized yet.
+  ///
+  /// Matches all keywords used by [detectPlatform] (e.g. 美团外卖, 饿了么,
+  /// 京东外卖, 淘宝闪购, 朴朴超市, plus the short form 美团/京东/朴朴),
+  /// as well as the fuzzy "京...外卖" variant for OCR misreadings.
+  bool hasPlatformKeyword(String text) {
+    if (text.isEmpty) return false;
+    for (final rule in _platformRules) {
+      if (text.contains(rule.keyword)) return true;
+    }
+    if (_jdFuzzyRegex.hasMatch(text)) return true;
+    return false;
+  }
 }
 
 /// A platform detection rule pairing a keyword to a display name.

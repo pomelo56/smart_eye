@@ -89,6 +89,21 @@ class TtsService {
     await _audioService.playAssets(['assets/audio/scanning.mp3']);
   }
 
+  /// Plays the "发现外卖，识别中，手机请稳一些" prompt.
+  ///
+  /// Triggered when the OCR result contains a delivery platform keyword
+  /// but the pickup code has not been recognized yet (5-second cooldown
+  /// is enforced by the caller).
+  Future<void> speakDetectedTakeout() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(const [
+      'assets/audio/faxian_waimai.mp3',
+      'assets/audio/shibiezhong.mp3',
+      'assets/audio/please_steady.mp3',
+    ]);
+    lastSpeakResult = 1;
+  }
+
   /// Announces history records one by one.
   ///
   /// Format: "历史记录。第1条 美团外卖 65号。第2条 饿了么 2号。"

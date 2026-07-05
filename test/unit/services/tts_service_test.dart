@@ -165,6 +165,30 @@ void main() {
       expect(audio.playedPaths, equals(['assets/audio/none.mp3']));
     });
 
+    test('speakDetectedTakeout plays the 3-clip sequence', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+      await service.speakDetectedTakeout();
+
+      expect(service.lastSpeakResult, equals(1));
+      expect(
+          audio.playedPaths,
+          equals([
+            'assets/audio/faxian_waimai.mp3',
+            'assets/audio/shibiezhong.mp3',
+            'assets/audio/please_steady.mp3',
+          ]));
+    });
+
+    test('speakDetectedTakeout is no-op when not initialized', () async {
+      final audio = MockAudioService()..setInitialized(false);
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+      await service.speakDetectedTakeout();
+      expect(audio.playedPaths, isEmpty);
+    });
+
     test('maps digit text with 号 suffix to digit clips', () async {
       final audio = MockAudioService();
       final service = TtsService(audioService: audio);
