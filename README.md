@@ -114,11 +114,12 @@ smart_eye/
 # 查看所有版本
 git tag -l
 
-# 查看当前代码版本
-python3 -c "from src.config import __version__; print(__version__)"
+# 查看当前 Flutter App 版本
+flutter --version
+head -n 3 pubspec.yaml
 
-# 回滚到指定版本
-git checkout v0.2.0
+# 切换到指定 tag（例如回滚到上一个稳定版）
+git checkout v0.6.0
 ```
 
 版本变更记录见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
