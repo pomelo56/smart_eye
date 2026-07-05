@@ -57,3 +57,11 @@ git reset --hard vX.Y.Z
 - [ ] HomeScreen 拆分（功能稳定后）
 - [ ] 日志覆盖层调试模式开关
 - [ ] 三击窗口延长到 800ms
+
+## 长期规划
+
+详见 [docs/ROADMAP.md](docs/ROADMAP.md)：
+
+- v1.0.0：云端 LLM 语义理解（阿里云百炼 qwen-turbo 永久免费）
+- v1.1.0：系统 TTS 替代预录音频
+- v2.0.0：多模态图片识别（识别非文字物品）

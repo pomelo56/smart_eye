@@ -5,6 +5,9 @@
 /// - 饿了么 (Ele.me): `[ 饿了么 ] #2`
 /// - 京东外卖 (JD Takeout): `#6 京东外卖`
 /// - 淘宝闪购 (Taobao Flash): `#18 淘宝闪购`
+/// - 美团闪购 (Meituan Flash): `#92 美团闪购`
+/// - 朴朴超市 (Pupu): `朴朴超市 #586132`
+/// - 美团直送 (Meituan Direct): `美团-261`
 ///
 /// The pickup code and platform name always appear together on the receipt.
 /// We use proximity-based detection: find the platform keyword closest to
@@ -13,14 +16,21 @@
 ///
 /// Single-frame confirmation with 5-second cooldown to prevent duplicates.
 class OcrService {
-  /// Matches `#` followed by 1-4 digits (covers all major platforms).
-  static final _mealCodeRegex = RegExp(r'#(\d{1,4})');
+  /// Matches `#` followed by 1-6 digits (covers all major platforms including
+  /// 朴朴超市's 6-digit codes).
+  static final _mealCodeRegex = RegExp(r'#(\d{1,6})');
+
+  /// Matches `美团-数字` format (e.g. `美团-261`).
+  static final _meituanDashRegex = RegExp(r'美团-(\d{1,6})');
 
   /// Platform detection rules, ordered by priority (most specific first).
   /// Short keywords like "闪购" are excluded to avoid false matches when
   /// multiple receipts are in the same frame.
   static const _platformRules = <_PlatformRule>[
     _PlatformRule('淘宝闪购', '淘宝闪购'),
+    _PlatformRule('美团闪购', '美团闪购'),
+    _PlatformRule('朴朴超市', '朴朴超市'),
+    _PlatformRule('朴朴', '朴朴超市'),
     _PlatformRule('京东外卖', '京东外卖'),
     _PlatformRule('京东', '京东外卖'),
     _PlatformRule('美团外卖', '美团外卖'),
@@ -45,11 +55,24 @@ class OcrService {
   static const _cooldownDuration = Duration(seconds: 5);
 
   /// Extracts all meal codes from the given text.
+  ///
+  /// Supports two formats:
+  /// - `#数字` (1-6 digits) — standard format for most platforms
+  /// - `美团-数字` — Meituan direct delivery format
   List<String> extractMealCodes(String text) {
-    return _mealCodeRegex
-        .allMatches(text)
-        .map((m) => '#${m.group(1)}')
-        .toList();
+    final codes = <String>{};
+
+    // Standard # + digits format
+    for (final match in _mealCodeRegex.allMatches(text)) {
+      codes.add('#${match.group(1)}');
+    }
+
+    // 美团-数字 format (no # prefix)
+    for (final match in _meituanDashRegex.allMatches(text)) {
+      codes.add('#${match.group(1)}');
+    }
+
+    return codes.toList();
   }
 
   /// Selects the best meal code from a list of candidates.
@@ -83,6 +106,14 @@ class OcrService {
   /// Falls back to priority-ordered full-text search if no code is found
   /// or no keyword is near the code.
   String? detectPlatform(String text, {String? nearCode}) {
+    // Special case: 美团-数字 format always maps to 美团外卖
+    if (nearCode != null && _meituanDashRegex.hasMatch(text)) {
+      final dashMatch = _meituanDashRegex.firstMatch(text);
+      if (dashMatch != null && '#${dashMatch.group(1)}' == nearCode) {
+        return '美团外卖';
+      }
+    }
+
     // If we have a code, try proximity-based detection first.
     if (nearCode != null) {
       final codeIndex = text.indexOf(nearCode);

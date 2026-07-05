@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -37,10 +38,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isAnnouncing = false; // true while announcing a code; pauses scanning
   String? _lastAnnouncedCode;
   String? _lastDetectedPlatform;
+  String? _lastCodePosition; // remembers where the code was last seen
   Timer? _scanTimer;
   bool _feedbackBusy = false;
   DateTime? _ocrLogTimer;
   DateTime? _lastBeepTime; // cooldown for distance feedback beeps
+  DateTime? _lastGuidanceTime; // cooldown for direction guidance
+
+  /// Cross-frame code cache: codes seen in the last [_codeCacheWindow].
+  /// When a receipt is upside down, OCR may only detect one code per frame.
+  /// We merge codes across frames so multi-code scenarios still work.
+  final Map<String, _CachedCode> _codeCache = {};
+  static const _codeCacheWindow = Duration(seconds: 3);
 
   static const _tutorialKey = 'has_seen_tutorial_v4';
 
@@ -175,8 +184,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _isProcessing = true;
     try {
       final image = await _cameraController!.takePicture();
+
+      // Read actual image dimensions for accurate position calculation.
+      // The captured image may be in sensor-native (landscape) orientation
+      // or already rotated to portrait, depending on the device.
+      int imgW = 720, imgH = 1280;
+      try {
+        final bytes = await File(image.path).readAsBytes();
+        final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+        final descriptor = await ui.ImageDescriptor.encoded(buffer);
+        imgW = descriptor.width;
+        imgH = descriptor.height;
+        buffer.dispose();
+        descriptor.dispose();
+      } catch (_) {
+        // Fallback to previewSize if descriptor fails
+      }
+
+      // Recognize both the original and 180°-rotated image, then merge.
+      // Visually impaired users cannot rotate receipts, so the app must
+      // handle both orientations automatically.
       final inputImage = InputImage.fromFilePath(image.path);
       final recognizedText = await _textRecognizer.processImage(inputImage);
+
+      // Recognize 180°-rotated copy. Block coordinates in the result are in
+      // the rotated image space; we'll transform them back later.
+      final rotatedText = await _recognizeRotated(image.path, 180);
 
       // Clean up temp file
       try {
@@ -184,63 +217,112 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (await file.exists()) await file.delete();
       } catch (_) {}
 
-      final text = recognizedText.text.trim();
-      final hasText = text.isNotEmpty;
+      // Merge both recognition results into a single text + block list.
+      // Block coordinates from rotated text need to be transformed back to
+      // the original image space.
+      final allBlocks = <_OrientedBlock>[
+        ...recognizedText.blocks.map((b) => _OrientedBlock(b, false)),
+        ...rotatedText.blocks.map((b) => _OrientedBlock(b, true)),
+      ];
+      final combinedText = allBlocks.map((b) => b.block.text).join('\n');
+      final hasText = combinedText.trim().isNotEmpty;
 
       // Always log OCR result every 5 seconds
       if (_ocrLogTimer == null ||
           DateTime.now().difference(_ocrLogTimer!) >
               const Duration(seconds: 5)) {
-        _log('OCR: ${hasText ? '${text.length}字 ${text.substring(0, text.length > 50 ? 50 : text.length)}' : '无文字'}');
+        final preview = combinedText.length > 50
+            ? combinedText.substring(0, 50)
+            : combinedText;
+        _log('OCR: ${hasText ? '${combinedText.length}字 $preview' : '无文字'}');
         _ocrLogTimer = DateTime.now();
       }
 
-      final codes = _ocrService.extractMealCodes(recognizedText.text);
+      final codes = _ocrService.extractMealCodes(combinedText);
 
       if (codes.isEmpty) {
         // No codes found but text detected → play scanning prompt.
         if (hasText) {
           _log('codes=[] → 识别中提示');
           await _playScanningPrompt();
+        } else {
+          // No text at all → receipt likely out of frame.
+          // Guide the user back based on last known position.
+          await _playDirectionGuidance();
         }
       } else {
         // Single or multi-code: find each code's containing block for
         // accurate per-receipt platform detection.
         final results = <ScanResult>[];
-        double? minX, minY, maxX, maxY;
 
-        // Compute overall text bounds from all blocks.
-        for (final block in recognizedText.blocks) {
-          final box = block.boundingBox;
-          if (minX == null || box.left < minX) minX = box.left;
-          if (minY == null || box.top < minY) minY = box.top;
-          if (maxX == null || box.right > maxX) maxX = box.right;
-          if (maxY == null || box.bottom > maxY) maxY = box.bottom;
-        }
-        final textBounds = (minX != null && minY != null && maxX != null && maxY != null)
-            ? Rect.fromLTRB(minX, minY, maxX, maxY)
-            : Rect.zero;
+        // Use the full image frame as position reference.
+        // ML Kit's InputImage.fromFilePath reads EXIF rotation metadata and
+        // internally rotates the image to upright (portrait) orientation.
+        // Therefore bounding boxes are ALREADY in upright coordinate space —
+        // no manual transformation needed. We just need the upright dimensions.
+        final isLandscapeRaw = imgW > imgH;
+        // Upright (portrait) dimensions after EXIF rotation is applied.
+        final uprightW = isLandscapeRaw ? imgH.toDouble() : imgW.toDouble();
+        final uprightH = isLandscapeRaw ? imgW.toDouble() : imgH.toDouble();
+        final imageBounds = Rect.fromLTWH(0, 0, uprightW, uprightH);
 
         // For each code, find its block, position, and platform.
         for (final code in codes) {
           // Find the block containing this code.
+          // Use multi-pass matching to avoid false matches:
+          //   1. Exact "#18" match (most reliable)
+          //   2. Block contains "#" AND the digits (e.g. "# 18")
+          //   3. Fallback: digits only (least reliable, may match dates/prices)
           String? blockText;
           Rect? codeBox;
-          for (final block in recognizedText.blocks) {
-            if (block.text.contains(code) ||
-                block.text.contains(code.replaceFirst('#', ''))) {
-              codeBox = block.boundingBox;
-              blockText = block.text;
+
+          // Pass 1: exact match (e.g. block contains "#18")
+          for (final ob in allBlocks) {
+            if (ob.block.text.contains(code)) {
+              codeBox = ob.transformedBox(uprightW, uprightH);
+              blockText = ob.block.text;
               break;
             }
           }
+
+          // Pass 2: block has "#" and the digits separately
+          if (codeBox == null) {
+            final digits = code.replaceFirst('#', '');
+            for (final ob in allBlocks) {
+              if (ob.block.text.contains('#') &&
+                  ob.block.text.contains(digits)) {
+                codeBox = ob.transformedBox(uprightW, uprightH);
+                blockText = ob.block.text;
+                break;
+              }
+            }
+          }
+
+          // Pass 3: fallback — digits only
+          if (codeBox == null) {
+            final digits = code.replaceFirst('#', '');
+            for (final ob in allBlocks) {
+              if (ob.block.text.contains(digits)) {
+                codeBox = ob.transformedBox(uprightW, uprightH);
+                blockText = ob.block.text;
+                break;
+              }
+            }
+          }
+
           if (codeBox == null || blockText == null) continue;
 
+          // Bounding box is already in upright (portrait) coordinate space.
+          // Use it directly — no transformation.
           final center = Offset(
             (codeBox.left + codeBox.right) / 2,
             (codeBox.top + codeBox.bottom) / 2,
           );
-          final posLabel = computePositionLabel(center, textBounds);
+          final posLabel = computePositionLabel(center, imageBounds);
+          _lastCodePosition = posLabel; // remember for direction guidance
+          _log('位置调试: code=$code center=(${center.dx.toInt()},${center.dy.toInt()}) '
+              'upright=${uprightW.toInt()}x${uprightH.toInt()} '
+              'rawImg=${imgW}x$imgH posLabel=$posLabel');
           // Detect platform using ONLY the code's own block text,
           // preventing cross-receipt misidentification.
           final platform = _ocrService.detectPlatform(blockText, nearCode: code);
@@ -253,59 +335,105 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ));
         }
 
-        if (results.isEmpty) {
-          await _playScanningPrompt();
-        } else {
-          // Sort by screen position: top-to-bottom, then left-to-right.
-          results.sort((a, b) {
+        // --- Cross-frame code merging ---
+        // When a receipt is upside down, OCR may only detect one code per
+        // frame. We cache detected codes for [_codeCacheWindow] and merge
+        // them with the current frame so multi-code scenarios still work.
+        final now = DateTime.now();
+
+        // Purge expired entries.
+        _codeCache.removeWhere(
+            (key, cached) => now.difference(cached.timestamp) > _codeCacheWindow);
+
+        // Add/update current frame's codes into the cache.
+        for (final r in results) {
+          _codeCache[r.code] = _CachedCode(
+            code: r.code,
+            platform: r.platform,
+            positionLabel: r.positionLabel,
+            center: r.center,
+            timestamp: now,
+          );
+        }
+
+        // Build merged results from cache (current frame + recent frames),
+        // converted to ScanResult for downstream compatibility.
+        final mergedResults = _codeCache.values
+            .map((c) => ScanResult(
+                  code: c.code,
+                  platform: c.platform,
+                  positionLabel: c.positionLabel,
+                  center: c.center,
+                ))
+            .toList()
+          ..sort((a, b) {
             final yDiff = a.center.dy.compareTo(b.center.dy);
             if (yDiff.abs() > 20) return yDiff;
             return a.center.dx.compareTo(b.center.dx);
           });
 
-          if (results.length == 1) {
+        // Use merged results if there are more codes than the current frame.
+        final effectiveResults =
+            mergedResults.length > results.length ? mergedResults : results;
+
+        if (effectiveResults.isEmpty) {
+          await _playScanningPrompt();
+        } else {
+          // effectiveResults is already sorted (from cache merge or above).
+          // Re-sort to be safe.
+          effectiveResults.sort((a, b) {
+            final yDiff = a.center.dy.compareTo(b.center.dy);
+            if (yDiff.abs() > 20) return yDiff;
+            return a.center.dx.compareTo(b.center.dx);
+          });
+
+          if (effectiveResults.length == 1) {
             // Single code flow.
-            final r = results.first;
+            final r = effectiveResults.first;
             final platformLabel = r.platform ?? '未知';
             _log('codes=$codes platform=$platformLabel');
             final confirmed = _ocrService.processFrame(r.code);
             _log('confirmed=$confirmed cool=${_ocrService.isInCooldown(r.code)}');
             if (confirmed != null) {
-              _log('识别到取餐码: ${r.code} ($platformLabel)');
+              _log('识别到取餐码: ${r.code} ($platformLabel) ${r.positionLabel}');
               _lastAnnouncedCode = confirmed;
               _lastDetectedPlatform = r.platform;
-              await _historyService.add(confirmed);
+              _lastCodePosition = r.positionLabel;
+              await _historyService.add(confirmed, platform: r.platform);
               _isAnnouncing = true;
               await _ttsService.stop();
-              await _ttsService.speak(
-                  _ttsService.formatMealCodeWithPlatform(confirmed, r.platform));
+              await _ttsService.speakSingleCodeWithPosition(
+                  confirmed, r.platform, r.positionLabel);
               _isAnnouncing = false;
             }
           } else {
             // Multi-code flow.
-            _log('codes=$codes → 多码检测');
-            final firstCode = results.first.code;
-            final confirmed = _ocrService.processFrame(firstCode);
-            if (confirmed != null) {
-              for (final r in results.skip(1)) {
+            _log('codes=$codes effective=${effectiveResults.map((r) => r.code).toList()} → 多码检测');
+            // Check if ANY code is new (not in cooldown).
+            final hasNewCode = effectiveResults.any((r) => !_ocrService.isInCooldown(r.code));
+            if (hasNewCode) {
+              for (final r in effectiveResults) {
                 _ocrService.processFrame(r.code);
               }
 
-              final summary = results
+              final summary = effectiveResults
                   .map((r) => '${r.code}(${r.platform ?? '?'})${r.positionLabel}')
                   .join(' ');
               _log('多码播报: $summary');
 
-              _lastAnnouncedCode = results.first.code;
-              _lastDetectedPlatform = results.first.platform;
-              for (final r in results) {
-                await _historyService.add(r.code);
+              _lastAnnouncedCode = effectiveResults.first.code;
+              _lastDetectedPlatform = effectiveResults.first.platform;
+              _lastCodePosition = effectiveResults.first.positionLabel;
+              for (final r in effectiveResults) {
+                await _historyService.add(r.code, platform: r.platform);
               }
 
               _isAnnouncing = true;
               await _ttsService.stop();
-              await _ttsService.speakMultiCode(results);
+              await _ttsService.speakMultiCode(effectiveResults);
               _isAnnouncing = false;
+            } else {
+              _log('多码: 所有码均在冷却中，跳过');
             }
           }
         }
@@ -329,6 +457,66 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _ttsService.speakScanning();
   }
 
+  /// Plays direction guidance when the receipt is out of frame.
+  ///
+  /// Uses the last known position of the code to tell the user which
+  /// direction to move the phone. Has a 5-second cooldown to avoid spam.
+  Future<void> _playDirectionGuidance() async {
+    if (_feedbackBusy || _isAnnouncing) return;
+
+    final now = DateTime.now();
+    if (_lastGuidanceTime != null &&
+        now.difference(_lastGuidanceTime!) < const Duration(seconds: 5)) {
+      return;
+    }
+    _lastGuidanceTime = now;
+
+    _feedbackBusy = true;
+    await _ttsService.stop();
+
+    final clips = <String>['assets/audio/not_in_frame.mp3'];
+
+    // Build direction clips based on last known position.
+    final pos = _lastCodePosition;
+    if (pos != null) {
+      clips.add('assets/audio/move.mp3');
+      // Map position label to direction audio.
+      final dirClip = _positionToDirectionClip(pos);
+      if (dirClip != null) clips.add(dirClip);
+      clips.add('assets/audio/pian.mp3');
+    }
+
+    _log('方向引导: 小票不在画面中, 上次位置=$pos');
+    await _ttsService.speakAudioClips(clips);
+    _feedbackBusy = false;
+  }
+
+  /// Maps a position label (e.g. "左下") to a direction audio clip.
+  String? _positionToDirectionClip(String pos) {
+    switch (pos) {
+      case '左上':
+        return 'assets/audio/up.mp3'; // simplified: guide to upper area
+      case '右上':
+        return 'assets/audio/up.mp3';
+      case '左下':
+        return 'assets/audio/down.mp3';
+      case '右下':
+        return 'assets/audio/down.mp3';
+      case '左侧':
+        return 'assets/audio/left.mp3';
+      case '右侧':
+        return 'assets/audio/right.mp3';
+      case '上方':
+        return 'assets/audio/up.mp3';
+      case '下方':
+        return 'assets/audio/down.mp3';
+      case '中间':
+        return null; // no specific direction needed
+      default:
+        return null;
+    }
+  }
+
   Future<void> _playDistanceFeedback({required bool slow}) async {
     if (_feedbackBusy) return;
     // Cooldown: at most one beep per 8 seconds to avoid audio spam
@@ -349,12 +537,67 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _feedbackBusy = false;
   }
 
+  /// Recognizes text in a rotated copy of the given image.
+  ///
+  /// Used for 180°-rotated receipts that ML Kit can't read normally. Returns
+  /// an empty [RecognizedText] if the rotation fails for any reason (e.g. out
+  /// of memory, unsupported file format).
+  Future<RecognizedText> _recognizeRotated(
+      String imagePath, int rotationDeg) async {
+    try {
+      final bytes = await File(imagePath).readAsBytes();
+      final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+      final descriptor = await ui.ImageDescriptor.encoded(buffer);
+      final codec = await descriptor.instantiateCodec();
+      final frame = await codec.getNextFrame();
+      final src = frame.image;
+      final srcW = src.width;
+      final srcH = src.height;
+      buffer.dispose();
+      descriptor.dispose();
+      codec.dispose();
+
+      // Rotate 180°: dstW == srcW, dstH == srcH
+      final recorder = ui.PictureRecorder();
+      final canvas = ui.Canvas(recorder);
+      canvas.translate(srcW.toDouble(), srcH.toDouble());
+      canvas.rotate(rotationDeg * 3.14159265358979 / 180);
+      canvas.drawImage(src, Offset.zero, ui.Paint());
+      final picture = recorder.endRecording();
+      final rotated = await picture.toImage(srcW, srcH);
+      picture.dispose();
+      src.dispose();
+
+      // Encode to PNG and run ML Kit on the bytes.
+      final byteData =
+          await rotated.toByteData(format: ui.ImageByteFormat.png);
+      rotated.dispose();
+      if (byteData == null) {
+        return RecognizedText(text: '', blocks: []);
+      }
+
+      // Write to a temp file so InputImage.fromFilePath can read it (some
+      // Android versions don't support raw byte input images for ML Kit).
+      final tmp = File('$imagePath.rotated.png');
+      await tmp.writeAsBytes(byteData.buffer.asUint8List());
+      final result =
+          await _textRecognizer.processImage(InputImage.fromFilePath(tmp.path));
+      try {
+        await tmp.delete();
+      } catch (_) {}
+      return result;
+    } catch (e) {
+      _log('旋转识别失败: $e');
+      return RecognizedText(text: '', blocks: []);
+    }
+  }
+
   Future<void> _replayLast() async {
     _log('手势: 单击重听');
     await _ttsService.stop();
     if (_lastAnnouncedCode != null) {
-      await _ttsService.speak(_ttsService
-          .formatMealCodeWithPlatform(_lastAnnouncedCode!, _lastDetectedPlatform));
+      await _ttsService.speakSingleCodeWithPosition(
+          _lastAnnouncedCode!, _lastDetectedPlatform, _lastCodePosition);
     } else {
       await _ttsService.speak('没有识别到取餐码');
     }
@@ -366,6 +609,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _ocrService.reset();
     _lastAnnouncedCode = null;
     _lastDetectedPlatform = null;
+    _lastCodePosition = null;
     _isAnnouncing = false;
     await _ttsService.speak('没有识别到取餐码，请重新对准小票');
   }
@@ -519,6 +763,56 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// A code cached from a recent frame, used for cross-frame merging.
+class _CachedCode {
+  final String code;
+  final String? platform;
+  final String positionLabel;
+  final Offset center;
+  final DateTime timestamp;
+
+  _CachedCode({
+    required this.code,
+    required this.platform,
+    required this.positionLabel,
+    required this.center,
+    required this.timestamp,
+  });
+}
+
+/// A recognized text block tagged with whether it came from a rotated image.
+///
+/// For rotated images, bounding box coordinates are in the rotated coordinate
+/// space. [transformedBox] maps them back to the original (upright) space so
+/// downstream position logic works uniformly.
+class _OrientedBlock {
+  final TextBlock block;
+  final bool rotated;
+
+  _OrientedBlock(this.block, this.rotated);
+
+  /// Returns the bounding box in the original (upright) image coordinate space.
+  ///
+  /// [uprightW] and [uprightH] are the dimensions of the upright image.
+  Rect transformedBox(double uprightW, double uprightH) {
+    if (!rotated) return block.boundingBox;
+    // 180° rotation: (x, y) → (W - x, H - y)
+    // So the original-space point is (rotW - x, rotH - y).
+    // The bounding box in original space is therefore:
+    //   left = uprightW - box.right
+    //   top = uprightH - box.bottom
+    //   right = uprightW - box.left
+    //   bottom = uprightH - box.top
+    final b = block.boundingBox;
+    return Rect.fromLTRB(
+      uprightW - b.right,
+      uprightH - b.bottom,
+      uprightW - b.left,
+      uprightH - b.top,
     );
   }
 }

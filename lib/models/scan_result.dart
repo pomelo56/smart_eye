@@ -63,7 +63,8 @@ String computePositionLabel(Offset point, Rect textBounds) {
 }
 
 /// Maps a position label to its audio asset path.
-String? positionAudioAsset(String label) {
+String? positionAudioAsset(String? label) {
+  if (label == null) return null;
   switch (label) {
     case '左上':
       return 'assets/audio/pos_topleft.mp3';

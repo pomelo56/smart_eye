@@ -20,7 +20,7 @@ class HistoryService {
   ///
   /// If the same code was already recorded within the last 5 seconds, it is
   /// ignored to avoid rapid duplicates from the multi-frame validation logic.
-  Future<void> add(String code) async {
+  Future<void> add(String code, {String? platform}) async {
     if (code.isEmpty) return;
 
     final records = await _readRecords();
@@ -34,7 +34,7 @@ class HistoryService {
       }
     }
 
-    records.insert(0, MealCode(code: code, recognizedAt: DateTime.now()));
+    records.insert(0, MealCode(code: code, recognizedAt: DateTime.now(), platform: platform));
 
     while (records.length > _maxRecords) {
       records.removeLast();
