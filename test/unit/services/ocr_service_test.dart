@@ -17,8 +17,8 @@ void main() {
 
     test('ignores non-meal-code numbers', () {
       final service = OcrService();
-      final result = service.extractMealCodes(
-          'Price: \u00a520.95, phone: 13812345678');
+      final result =
+          service.extractMealCodes('Price: \u00a520.95, phone: 13812345678');
       expect(result, isEmpty);
     });
 
@@ -41,10 +41,9 @@ void main() {
       expect(service.extractMealCodes('#1234'), equals(['#1234']));
     });
 
-    test('does not match 5-digit codes (too long for pickup code)', () {
+    test('matches 5-digit codes (Pupu uses up to 6 digits)', () {
       final service = OcrService();
-      // Only the first 4 digits are captured.
-      expect(service.extractMealCodes('#12345'), equals(['#1234']));
+      expect(service.extractMealCodes('#12345'), equals(['#12345']));
     });
 
     test('ignores codes without hash prefix', () {
@@ -221,9 +220,7 @@ void main() {
 
     test('returns null when no platform keyword anywhere', () {
       final service = OcrService();
-      expect(
-        service.detectPlatform('#65 随便什么', nearCode: '#65'),
-        isNull);
+      expect(service.detectPlatform('#65 随便什么', nearCode: '#65'), isNull);
     });
 
     test('fuzzy matches JD Takeout when OCR misreads "京东" as "京不"', () {
@@ -268,11 +265,24 @@ void main() {
       expect(service.processFrame('#23'), equals('#23'));
     });
 
-    test('returns code again after 5-second cooldown expires', () async {
-      final service = OcrService();
+    test('returns code again after 5-second cooldown expires', () {
+      var now = DateTime(2026, 7, 5, 12, 0, 0);
+      final service = OcrService(clock: () => now);
       service.processFrame('#15'); // confirmed
-      await Future.delayed(const Duration(seconds: 5));
+      now = now.add(const Duration(seconds: 5));
       expect(service.processFrame('#15'), equals('#15'));
+    });
+
+    test('clears expired cooldown entries', () {
+      var now = DateTime(2026, 7, 5, 12, 0, 0);
+      final service = OcrService(clock: () => now);
+      service.processFrame('#15');
+      service.processFrame('#23');
+      now = now.add(const Duration(seconds: 6));
+      service.processFrame('#99');
+      expect(service.isInCooldown('#15'), isFalse);
+      expect(service.isInCooldown('#23'), isFalse);
+      expect(service.isInCooldown('#99'), isTrue);
     });
   });
 
@@ -289,10 +299,11 @@ void main() {
       expect(service.isInCooldown('#23'), isFalse);
     });
 
-    test('returns false after 5 second cooldown expires', () async {
-      final service = OcrService();
+    test('returns false after 5 second cooldown expires', () {
+      var now = DateTime(2026, 7, 5, 12, 0, 0);
+      final service = OcrService(clock: () => now);
       service.processFrame('#15');
-      await Future.delayed(const Duration(seconds: 5));
+      now = now.add(const Duration(seconds: 5));
       expect(service.isInCooldown('#15'), isFalse);
     });
   });

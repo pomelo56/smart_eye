@@ -38,9 +38,10 @@ class TtsService {
 
   /// Initializes the audio playback service.
   ///
-  /// Always returns true because the only dependency is bundled assets.
+  /// Verifies the native audio channel is reachable. Returns true if the
+  /// bundled audio engine is ready, false otherwise.
   Future<bool> initialize() async {
-    _isInitialized = _audioService.isInitialized;
+    _isInitialized = await _audioService.initialize();
     initStatus = _isInitialized ? 'assets/ready' : 'assets/unavailable';
     debugPrint('[TTS] audio fallback initialized: $_isInitialized');
     return _isInitialized;
@@ -74,8 +75,12 @@ class TtsService {
   }
 
   /// Stops current playback.
-  Future<void> stop() async {
-    await _audioService.stop();
+  ///
+  /// Returns true if the stop command reached the native player, false
+  /// if the audio service is not initialized or the native call failed.
+  Future<bool> stop() async {
+    if (!_isInitialized) return false;
+    return _audioService.stop();
   }
 
   /// Plays the "识别中，手机请稳一些" scanning prompt.
@@ -311,8 +316,7 @@ class TtsService {
     if (match2 != null) return match2.group(1);
 
     // Pattern 3: "平台名 数字" (no 号 suffix)
-    final match3 = RegExp(
-            r'(?:美团外卖|美团闪购|饿了么|京东外卖|淘宝闪购|朴朴超市)\s*(\d{1,6})')
+    final match3 = RegExp(r'(?:美团外卖|美团闪购|饿了么|京东外卖|淘宝闪购|朴朴超市)\s*(\d{1,6})')
         .firstMatch(text);
     if (match3 != null) return match3.group(1);
 

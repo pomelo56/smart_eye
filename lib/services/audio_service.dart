@@ -11,8 +11,9 @@ import 'package:flutter/services.dart';
 /// callback ("onPlaybackComplete") instead of estimated delays.
 class AudioService {
   static const MethodChannel _channel = MethodChannel('com.smart_eye/audio');
+  static bool _handlerSet = false;
 
-  final bool _isInitialized = true;
+  bool _isInitialized = false;
 
   /// Completer for the current playback session. Completed when the native
   /// side signals "onPlaybackComplete" or when [stop] is called.
@@ -21,13 +22,36 @@ class AudioService {
   bool get isInitialized => _isInitialized;
 
   AudioService() {
-    // Listen for native → Dart callbacks.
-    _channel.setMethodCallHandler((call) async {
-      if (call.method == 'onPlaybackComplete') {
-        _completePlayback();
-      }
-      return null;
-    });
+    // Listen for native → Dart callbacks only once. Multiple AudioService
+    // instances may be created in tests and the app lifecycle, but Flutter
+    // only allows one handler per MethodChannel.
+    if (!_handlerSet) {
+      _handlerSet = true;
+      _channel.setMethodCallHandler((call) async {
+        if (call.method == 'onPlaybackComplete') {
+          _completePlayback();
+        }
+        return null;
+      });
+    }
+  }
+
+  /// Verifies the native MethodChannel is reachable.
+  ///
+  /// Returns true if the native side responds to a ping, false otherwise.
+  /// This prevents the app from silently failing when the audio engine is
+  /// unavailable.
+  Future<bool> initialize() async {
+    try {
+      final ok = await _channel.invokeMethod<bool>('ping');
+      _isInitialized = ok == true;
+      return _isInitialized;
+    } catch (e) {
+      // ignore: avoid_print
+      print('[AudioService] initialize error: $e');
+      _isInitialized = false;
+      return false;
+    }
   }
 
   /// Completes the current playback completer if pending.
@@ -42,7 +66,8 @@ class AudioService {
   /// Blocks until all clips have finished playing (via native callback).
   /// Each path must be relative to the Flutter assets root, e.g.
   /// `'assets/audio/num_1.mp3'`.
-  Future<bool> playAssets(List<String> assetPaths, {double volume = 1.0}) async {
+  Future<bool> playAssets(List<String> assetPaths,
+      {double volume = 1.0}) async {
     // Complete any pending playback (e.g. from a previous interrupted call).
     _completePlayback();
 
@@ -73,14 +98,18 @@ class AudioService {
   }
 
   /// Stops any ongoing playback.
-  Future<void> stop() async {
+  ///
+  /// Returns true if the native stop command succeeded, false otherwise.
+  Future<bool> stop() async {
     // Unblock any waiting playAssets call.
     _completePlayback();
     try {
-      await _channel.invokeMethod<bool>('stop');
+      final ok = await _channel.invokeMethod<bool>('stop');
+      return ok == true;
     } catch (e) {
       // ignore: avoid_print
       print('[AudioService] stop error: $e');
+      return false;
     }
   }
 
