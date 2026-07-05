@@ -9,37 +9,43 @@ class MockAudioService extends Fake implements AudioService {
   void setInitialized(bool value) => _initialized = value;
 
   @override
+  Future<bool> initialize() async => _initialized;
+
+  @override
   bool get isInitialized => _initialized;
 
   @override
-  Future<bool> playAssets(List<String> assetPaths, {double volume = 1.0}) async {
+  Future<bool> playAssets(List<String> assetPaths,
+      {double volume = 1.0}) async {
     playedPaths.addAll(assetPaths);
     return true;
   }
 
   @override
-  Future<void> stop() async {}
+  Future<bool> stop() async => _initialized;
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('TtsService.formatMealCode', () {
     test('formats #15 as 井 15', () {
-      final service = TtsService();
+      final service = TtsService(audioService: MockAudioService());
       expect(service.formatMealCode('#15'), equals('井 15'));
     });
 
     test('formats #1 as 井 1', () {
-      final service = TtsService();
+      final service = TtsService(audioService: MockAudioService());
       expect(service.formatMealCode('#1'), equals('井 1'));
     });
 
     test('formats #999 as 井 999', () {
-      final service = TtsService();
+      final service = TtsService(audioService: MockAudioService());
       expect(service.formatMealCode('#999'), equals('井 999'));
     });
 
     test('handles code without hash prefix', () {
-      final service = TtsService();
+      final service = TtsService(audioService: MockAudioService());
       expect(service.formatMealCode('15'), equals('井 15'));
     });
   });
@@ -134,10 +140,12 @@ void main() {
       await service.speak('beep_slow');
       await service.speak('beep_fast');
 
-      expect(audio.playedPaths, equals([
-        'assets/audio/beep_slow.mp3',
-        'assets/audio/beep_fast.mp3',
-      ]));
+      expect(
+          audio.playedPaths,
+          equals([
+            'assets/audio/beep_slow.mp3',
+            'assets/audio/beep_fast.mp3',
+          ]));
     });
 
     test('does not throw when not initialized', () async {
@@ -157,19 +165,21 @@ void main() {
       expect(audio.playedPaths, equals(['assets/audio/none.mp3']));
     });
 
-    test('maps pure digit text to digit clips', () async {
+    test('maps digit text with 号 suffix to digit clips', () async {
       final audio = MockAudioService();
       final service = TtsService(audioService: audio);
       await service.initialize();
-      await service.speak('123');
+      await service.speak('123 号');
 
       expect(service.lastSpeakResult, equals(1));
-      expect(audio.playedPaths, equals([
-        'assets/audio/num_1.mp3',
-        'assets/audio/num_2.mp3',
-        'assets/audio/num_3.mp3',
-        'assets/audio/hao.mp3',
-      ]));
+      expect(
+          audio.playedPaths,
+          equals([
+            'assets/audio/num_1.mp3',
+            'assets/audio/num_2.mp3',
+            'assets/audio/num_3.mp3',
+            'assets/audio/hao.mp3',
+          ]));
     });
 
     test('maps platform name + meal code to platform clips', () async {
@@ -179,12 +189,14 @@ void main() {
       await service.speak('淘宝闪购 18 号');
 
       expect(service.lastSpeakResult, equals(1));
-      expect(audio.playedPaths, equals([
-        'assets/audio/taobao.mp3',
-        'assets/audio/num_1.mp3',
-        'assets/audio/num_8.mp3',
-        'assets/audio/hao.mp3',
-      ]));
+      expect(
+          audio.playedPaths,
+          equals([
+            'assets/audio/taobao.mp3',
+            'assets/audio/num_1.mp3',
+            'assets/audio/num_8.mp3',
+            'assets/audio/hao.mp3',
+          ]));
     });
 
     test('maps Meituan platform name to meituan clip', () async {
@@ -193,12 +205,14 @@ void main() {
       await service.initialize();
       await service.speak('美团外卖 65 号');
 
-      expect(audio.playedPaths, equals([
-        'assets/audio/meituan.mp3',
-        'assets/audio/num_6.mp3',
-        'assets/audio/num_5.mp3',
-        'assets/audio/hao.mp3',
-      ]));
+      expect(
+          audio.playedPaths,
+          equals([
+            'assets/audio/meituan.mp3',
+            'assets/audio/num_6.mp3',
+            'assets/audio/num_5.mp3',
+            'assets/audio/hao.mp3',
+          ]));
     });
 
     test('maps unknown platform without platform clip', () async {
@@ -207,11 +221,13 @@ void main() {
       await service.initialize();
       await service.speak('15 号');
 
-      expect(audio.playedPaths, equals([
-        'assets/audio/num_1.mp3',
-        'assets/audio/num_5.mp3',
-        'assets/audio/hao.mp3',
-      ]));
+      expect(
+          audio.playedPaths,
+          equals([
+            'assets/audio/num_1.mp3',
+            'assets/audio/num_5.mp3',
+            'assets/audio/hao.mp3',
+          ]));
     });
 
     test('returns empty paths for unmapped text', () async {
@@ -226,11 +242,20 @@ void main() {
   });
 
   group('TtsService.stop', () {
-    test('stops without error', () async {
+    test('returns true when initialized and native stop succeeds', () async {
       final audio = MockAudioService();
       final service = TtsService(audioService: audio);
       await service.initialize();
-      await service.stop();
+      final ok = await service.stop();
+      expect(ok, isTrue);
+    });
+
+    test('returns false when not initialized', () async {
+      final audio = MockAudioService()..setInitialized(false);
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+      final ok = await service.stop();
+      expect(ok, isFalse);
     });
   });
 }
