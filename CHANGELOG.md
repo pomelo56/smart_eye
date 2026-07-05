@@ -9,6 +9,23 @@
 
 ---
 
+## [0.6.0] — 2026-07-05
+
+### Added
+- 「发现外卖」语音提示：当 OCR 识别到外卖平台关键词（美团/饿了么/京东/淘宝闪购/朴朴）但尚未识别到取餐码时，播报"发现外卖，识别中，手机请稳一些"
+- `OcrService.hasPlatformKeyword()`：检测文本中是否包含外卖平台关键词（含模糊匹配"京...外卖"）
+- `TtsService.speakDetectedTakeout()`：拼接 3 段音频播放"发现外卖 / 识别中 / 手机请稳一些"
+- `_playDetectedTakeoutPrompt()` HomeScreen 方法：5 秒冷却保护，避免手机抖动时反复触发
+- 单元测试 `ocr_platform_keyword_test.dart`：9 个测试覆盖各类平台关键词
+
+### Changed
+- HomeScreen `_scanFrame` 在 `codes.isEmpty` 分支先检查平台关键词，命中则播"发现外卖"提示，否则保持原有"识别中"提示
+
+### Note
+- v0.6.0 仅交付代码 + 单元测试 + 文档。3 个新音频文件（`faxian_waimai.mp3` / `shibiezhong.mp3` / `please_steady.mp3`）需后续录制后放入 `assets/audio/`，`pubspec.yaml` 已使用整目录声明无需修改。
+
+---
+
 ## [0.5.1] — 2026-07-05
 
 ### Fixed
