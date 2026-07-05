@@ -92,6 +92,8 @@ smart_eye/
 └── docs/
     ├── HANDOVER.md          # Agent 接手文档（必读）
     ├── CHANGELOG.md         # 版本变更归档
+    ├── AUDIO_GENERATION.md  # 音频生成工作流（say + afconvert）
+    ├── 无线调试安装APK.md   # 无线 ADB 部署流程
     ├── plans/               # 实施计划
     └── specs/               # 设计规格文档
 ```
