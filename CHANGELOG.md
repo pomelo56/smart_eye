@@ -9,6 +9,20 @@
 
 ---
 
+## [0.6.2] — 2026-07-06
+
+### Changed
+- **Debug APK 体积优化** — `flutter build apk --debug` 体积从 237 MB 降至 **89 MB**（-62%）
+  - 原因：`ndk.abiFilters "arm64-v8a"` 在 `defaultConfig` 中同时影响 debug 和 release，debug 此前未经验证
+  - 验证：`app-debug.apk` 内已只剩 `lib/arm64-v8a/` 一个目录
+- 更新 `docs/APK_SIZE_OPTIMIZATION.md` 记录 debug APK 体积与构成
+
+### Note
+- Debug APK 不可能压到 30 MB：必须保留 Dart 调试符号、Hot Reload 引擎、Kotlin kapt 注解
+- 89 MB 是当前工具链下的理论下限（除非放弃调试功能）
+
+---
+
 ## [0.6.1] — 2026-07-06
 
 ### Changed

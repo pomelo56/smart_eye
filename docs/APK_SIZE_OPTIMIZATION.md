@@ -2,14 +2,25 @@
 
 > 慧眼 SmartEye — 控制 APK 安装包大小，降低视障用户下载门槛。
 
-## v0.6.1 当前状态
+## v0.6.2 当前状态
 
 | 项目 | 优化前 | 优化后 | 节省 |
 |------|--------|--------|------|
-| debug APK | 227 MB | — | — |
+| debug APK | 237 MB（4 ABI）| **89 MB**（arm64-only）| -148 MB（-62%）|
 | **release APK（实测）** | ~65 MB（全 ABI + 全部资产） | **31.6 MB** | -33.4 MB（-51%）|
 
-### 31.6 MB 实际分布
+### debug APK 89 MB 分布
+
+| 项 | 大小 | 占比 |
+|----|------|------|
+| arm64-v8a 原生库（含 Dart 调试符号）| 61 MB | 73% |
+| Kotlin 元数据 + kapt 注解 | 22 MB | 17% |
+| flutter_assets + 音频 | 2.9 MB | 3% |
+| 其它 | 3.1 MB | 4% |
+
+> Debug APK 不可能压到 30 MB：它必须保留 Dart 调试符号、Hot Reload 引擎、Kotlin kapt 注解供 `flutter run` 使用。
+
+### release APK 31.6 MB 分布
 
 | 项 | 大小 | 占比 |
 |----|------|------|
@@ -18,14 +29,14 @@
 | assets (音频+flutter_assets) | 2.9 MB | 9% |
 | 其它（manifest/资源）| 0.8 MB | 3% |
 
-具体改动：
+### 历史变更
 
-1. **ABI 单架构** — `android/app/build.gradle` 添加 `ndk.abiFilters "arm64-v8a"`，只打包 64 位原生库
-2. **清理孤儿音频** — 删除 2 个未引用的 `closer.mp3` `farther.mp3`（早期计划的远近提示音，未实现）
+- **v0.6.1**：`ndk.abiFilters = "arm64-v8a"` 写在 `defaultConfig` 里——**同时影响 debug 和 release**
+- **v0.6.2**：确认 debug 也只打 arm64，体积从 237 MB 降至 89 MB
 
 ## 已采用的优化
 
-### 1. ABI 过滤（已启用）
+### 1. ABI 过滤（已启用，同时影响 debug + release）
 
 ```gradle
 // android/app/build.gradle
@@ -37,7 +48,8 @@ defaultConfig {
 ```
 
 **影响**：
-- ✅ Release APK 体积减少 ~50%
+- ✅ Release APK 体积减少 ~50%（65 MB → 31 MB）
+- ✅ Debug APK 体积减少 ~62%（237 MB → 89 MB）
 - ✅ 2019 年后的 Android 设备 100% 兼容
 - ❌ 2018 年及以前的 armv7 设备不能装
 

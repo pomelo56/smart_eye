@@ -110,10 +110,13 @@ cd /Users/pomelo/Project/smart_eye
 flutter build apk --release
 ```
 
-输出：`build/app/outputs/flutter-apk/app-release.apk`（约 22 MB，仅 arm64-v8a）
+输出：`build/app/outputs/flutter-apk/app-release.apk`（**约 31 MB**，仅 arm64-v8a）
 
 > **ABI 限制**：自 v0.6.1 起，`android/app/build.gradle` 中 `ndk.abiFilters = ["arm64-v8a"]`
 > 只打包 64 位原生库。2019 年后所有 Android 设备均支持。
+>
+> **Debug APK 体积**：debug 包约 89 MB（debug 需保留 Dart 调试符号、Hot Reload 引擎、Kotlin kapt 注解），
+> 同样只含 arm64-v8a。
 > 详见 `docs/APK_SIZE_OPTIMIZATION.md`。
 
 ### 3.3 安装到设备（无线 ADB）
