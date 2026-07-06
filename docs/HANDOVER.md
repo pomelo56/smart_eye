@@ -240,23 +240,23 @@ assets.openFd("flutter_assets/$path")
 
 ## 8. 分支与版本控制
 
-- `master`：主开发分支，所有开发从 `master` 分支拉出 feature worktree，合并后删除
-- `main`（GitHub 默认分支）：`master` 合并后通过 fast-forward 同步到 GitHub `main`
+- **`main`**：唯一主分支（GitHub 和 Gitee 默认分支均已统一为 `main`）
+- 历史已删除的 `master` 分支不再使用；如再出现需要排查 `git fetch --all` 后是否仍有未清理的 ref
 
 **新增功能**必须：
-1. 从 `master` 创建 feature 分支
-2. 使用 feature worktree（`git worktree add <worktree-path> -b feat/<name> master`）
+1. 从 `main` 创建 feature 分支
+2. 使用 feature worktree（`git worktree add <worktree-path> -b feat/<name> main`）
 3. 先写测试，再写实现（TDD）
 4. 更新 `CHANGELOG.md` / `VERSION.md` / `PROJECT.md` / `pubspec.yaml`
 5. `flutter analyze` 零警告 + `flutter test` 全绿
-6. 提交并合并到 `master`
-7. 把 feature 分支 + 合并后的 `master` **同时推送到 GitHub 和 Gitee**
+6. 提交并合并到 `main`
+7. 把 feature 分支 + 合并后的 `main` **同时推送到 GitHub 和 Gitee**
 
 ### 8.1 远程仓库配置
 
 ```bash
 git remote -v
-# origin    -> gitee.com:pomelo/smart_eye.git  (国内主用)
+# origin    -> gitee.com:free-style_2_0/smart_eye.git  (国内主用)
 # github    -> github.com:pomelo56/smart_eye.git  (海外镜像 / 比赛仓库)
 ```
 
@@ -282,13 +282,12 @@ git tag v0.X.0
 git push github feat/feat-xxx
 git push github v0.X.0
 
-# ====== 2. 合并到 master 并同步双仓库 ======
+# ====== 2. 合并到 main 并同步双仓库 ======
 cd /Users/pomelo/Project/smart_eye   # 回到主项目
 git fetch github feat/feat-xxx
 git merge feat/feat-xxx --ff-only
 git push github main
-git push origin master   # Gitee
-git push github master   # GitHub（main/master 同时存在）
+git push origin main   # Gitee
 
 # ====== 3. 构建并无线安装到手机 ======
 # 详见 docs/无线调试安装APK.md
