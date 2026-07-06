@@ -28,6 +28,24 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // Restrict native ABIs to arm64-v8a only to reduce APK size by ~50%.
+        // Modern devices (since 2019) all use arm64; armv7 is dropped.
+        // If you need to support armv7 devices, remove this block and
+        // pass --target-platform=android-arm,android-arm64 to flutter build.
+        ndk {
+            abiFilters "arm64-v8a"
+        }
+    }
+
+    // Split per-ABI so the universal APK stays small.
+    // The ndk.abiFilters above already restricts which ABIs are compiled;
+    // splits is left in its default state (disabled). Use
+    // 'flutter build apk --split-per-abi' to additionally generate per-ABI APKs.
+    splits {
+        abi {
+            enable false
+        }
     }
 
     buildTypes {

@@ -9,6 +9,23 @@
 
 ---
 
+## [0.6.1] — 2026-07-06
+
+### Changed
+- **APK 体积优化** — release APK 从 ~65 MB 降至 **31.6 MB**（-51%）
+  - ABI 单架构：`android/app/build.gradle` 添加 `ndk.abiFilters "arm64-v8a"`，只打包 64 位原生库
+  - 清理孤儿音频：删除未引用的 `closer.mp3` `farther.mp3`
+  - 新增 `docs/APK_SIZE_OPTIMIZATION.md` 记录优化方案
+
+### Added
+- `test/unit/services/audio_assets_inventory_test.dart` — 断言所有 `assets/audio/*.mp3` 都被 `lib/` 引用，防止引入孤儿音频或误删在用音频
+
+### Note
+- 自 v0.6.1 起，APK 不再支持 armv7 设备（2019 年后所有 Android 设备均为 arm64）
+- 后续 v0.7.0 计划启用 R8 代码压缩，可再省 5-10 MB
+
+---
+
 ## [0.6.0] — 2026-07-05
 
 ### Added
