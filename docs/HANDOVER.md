@@ -297,9 +297,10 @@ git push github main
 git push origin main   # Gitee
 
 # ====== 3. 构建并无线安装到手机 ======
-# 详见 docs/无线调试安装APK.md
-flutter build apk --release
-adb -s 192.168.1.7:44953 install -r build/app/outputs/flutter-apk/app-release.apk
+# 详见 docs/无线调试安装APK.md（IP/端口每次会变，禁止写死）
+DEVICE=$(adb devices | awk 'NR==2 {print $1}') && \
+  flutter build apk --release && \
+  adb -s "$DEVICE" install -r build/app/outputs/flutter-apk/app-release.apk
 ```
 
 ### 8.3 音频生成与构建集成
