@@ -1,0 +1,126 @@
+#!/bin/bash
+# smart_eye 一键发布脚本
+# 用法: ./scripts/release.sh v0.6.2
+# 流程:
+#   1. 运行 test.sh 确保所有测试通过
+#   2. 构建 release APK
+#   3. 推送 main + tag 到 github / origin (Gitee)
+#   4. 可选: 推送到手机验证 (需设置 RELEASE_INSTALL=1)
+
+set -e
+
+# ====== 参数检查 ======
+if [ $# -ne 1 ]; then
+    echo "❌ 用法: $0 <version-tag>"
+    echo "   示例: $0 v0.6.2"
+    exit 1
+fi
+
+VERSION_TAG="$1"
+
+# 校验 tag 格式 (vX.Y.Z)
+if ! [[ "$VERSION_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "❌ 错误: tag 格式必须为 vX.Y.Z (例如 v0.6.2)"
+    exit 1
+fi
+
+# ====== 环境检查 ======
+if [ ! -f "pubspec.yaml" ]; then
+    echo "❌ 错误: 请在项目根目录运行此脚本"
+    exit 1
+fi
+
+# 检查 main 分支 (避免误发)
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+if [ "$CURRENT_BRANCH" != "main" ]; then
+    echo "❌ 错误: 当前在分支 '$CURRENT_BRANCH'，发布必须在 main 分支"
+    echo "   请先合并 feature 分支到 main: git checkout main && git merge <feature>"
+    exit 1
+fi
+
+# 检查工作目录是否干净
+if [ -n "$(git status --short)" ]; then
+    echo "❌ 错误: 工作目录不干净，请先 commit 或 stash"
+    git status --short
+    exit 1
+fi
+
+# 检查 tag 是否已存在
+if git rev-parse "$VERSION_TAG" >/dev/null 2>&1; then
+    echo "❌ 错误: tag '$VERSION_TAG' 已存在"
+    exit 1
+fi
+
+# ====== 步骤 1: 运行测试 ======
+echo ""
+echo "🧪 步骤 1/4: 运行测试套件..."
+./scripts/test.sh
+
+# ====== 步骤 2: 构建 Release APK ======
+echo ""
+echo "🔨 步骤 2/4: 构建 Release APK..."
+flutter build apk --release
+APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
+echo "✅ APK 构建完成: $APK_PATH ($APK_SIZE)"
+
+# ====== 步骤 3: 推送到双仓库 ======
+echo ""
+echo "🚀 步骤 3/4: 推送到 GitHub + Gitee..."
+
+# 同步 main 到两个 remote
+echo "   推 main → github..."
+git push github main
+echo "   推 main → gitee..."
+git push origin main
+
+# 打 tag 并推送
+echo "   打 tag: $VERSION_TAG"
+git tag "$VERSION_TAG"
+echo "   推 tag → github..."
+git push github "$VERSION_TAG"
+echo "   推 tag → gitee..."
+git push origin "$VERSION_TAG"
+
+echo "✅ 标签已推送到 GitHub + Gitee"
+echo "   GitHub: https://github.com/pomelo56/smart_eye/releases/tag/$VERSION_TAG"
+echo "   Gitee:  https://gitee.com/free-style_2_0/smart_eye/releases/tag/$VERSION_TAG"
+
+# ====== 步骤 4: 可选 - 安装到手机 ======
+echo ""
+if [ "${RELEASE_INSTALL:-0}" = "1" ]; then
+    echo "📱 步骤 4/4: 推送到手机验证..."
+    DEVICE=$(adb devices | awk 'NR==2 {print $1}')
+    if [ -z "$DEVICE" ]; then
+        echo "❌ 未检测到 adb 设备，跳过安装"
+    else
+        echo "   目标设备: $DEVICE"
+        adb -s "$DEVICE" install -r "$APK_PATH"
+        echo "✅ 已安装到 $DEVICE"
+    fi
+else
+    echo "⏭️ 步骤 4/4: 跳过手机安装 (设置 RELEASE_INSTALL=1 启用)"
+fi
+
+# ====== 步骤 5: 可选 - 发布到 Gitee release ======
+echo ""
+if [ -n "${GITEE_TOKEN:-}" ]; then
+    if command -v ./scripts/release-gitee.sh >/dev/null 2>&1; then
+        echo "📦 发布到 Gitee release (找到 GITEE_TOKEN)..."
+        ./scripts/release-gitee.sh "$VERSION_TAG" "$APK_PATH"
+    fi
+else
+    echo "⏭️ 跳过 Gitee release 发布 (未设置 GITEE_TOKEN)"
+    echo "   设置方法: export GITEE_TOKEN=<你的令牌>"
+    echo "   令牌生成: https://gitee.com/personal_access_tokens"
+fi
+
+# ====== 收尾 ======
+echo ""
+echo "🎉 发布完成!"
+echo ""
+echo "📋 发布摘要:"
+echo "  标签:    $VERSION_TAG"
+echo "  APK:     $APK_PATH ($APK_SIZE)"
+echo "  GitHub:  https://github.com/pomelo56/smart_eye/releases/tag/$VERSION_TAG"
+echo "  Gitee:   https://gitee.com/free-style_2_0/smart_eye/releases/tag/$VERSION_TAG"

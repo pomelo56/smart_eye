@@ -307,6 +307,41 @@ DEVICE=$(adb devices | awk 'NR==2 {print $1}') && \
 
 新增语音素材时使用 `say` + `afconvert` 程序生成（详见 `docs/AUDIO_GENERATION.md`），不要录真人。生成后必须随 commit 一起推送，否则 APK 找不到资产会闪退。
 
+### 8.4 一键发布（推荐做法）
+
+完整发布 = 上面 1 + 2 步 + tag + 推送到双仓库。手动跑太繁琐，已封装为脚本：
+
+```bash
+# 标准发布
+./scripts/release.sh v0.6.2
+
+# 顺便装到手机（设置环境变量）
+RELEASE_INSTALL=1 ./scripts/release.sh v0.6.2
+
+# 顺便发布到 Gitee release（需要先设置令牌）
+export GITEE_TOKEN=<你的Gitee私人令牌>
+./scripts/release.sh v0.6.2
+```
+
+**前置条件**：
+- 必须在 `main` 分支
+- 工作目录必须干净
+- tag 必须符合 `vX.Y.Z` 格式
+- `flutter`、`adb`、`jq`、`curl` 都在 PATH 中
+
+**release.sh 流程**：
+1. 跑 `./scripts/test.sh`（analyze + format + test）
+2. `flutter build apk --release`
+3. 推 main + tag 到 github / origin
+4. （可选）安装到 adb 设备
+5. （可选）调 `./scripts/release-gitee.sh` 发 Gitee release
+
+**Gitee 令牌获取**：
+1. 打开 https://gitee.com/personal_access_tokens
+2. 新建令牌，勾选 `projects` 和 `releases` 两个 scope
+3. `export GITEE_TOKEN=xxx`（**仅当前 shell 会话有效**）
+4. **绝不要** 把令牌写进脚本或 commit 到仓库
+
 ---
 
 ## 9. 联系上下文
