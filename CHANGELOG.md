@@ -9,6 +9,59 @@
 
 ---
 
+## [0.7.1] — 2026-07-07 (紧急修复)
+
+### 🐛 Fixed — 摄像头权限缺失时 APP 静默卡死
+
+**严重级别**：🔴 P0（视障用户无任何反馈，APP 看起来已坏）
+
+**症状**：用户首次安装时拒绝摄像头权限，APP 反复 log "相机不可用"，视障用户听不到任何语音提示，无法知道发生了什么。
+
+**根因**：
+- `HomeScreen._initCameraWithRetry()` 把所有相机初始化失败都当成"硬件故障"处理
+- 没有调用 `ContextCompat.checkSelfPermission`，也不知道当前权限状态
+- 失败后只 log 4 个字就完事，没有任何语音播报（违反 AGENTS.md 5.3「禁止静默失败」）
+
+**修复**（v0.7.1）：
+- 新增 `lib/services/permission_service.dart` — 相机权限的统一入口
+  - `checkCameraPermission()` / `requestCameraPermission()` / `openAppSettings()`
+  - 用 `MethodChannel('com.smart_eye/permission')` 与 MainActivity 通信，**不引入 `permission_handler` 依赖**（节省 ~2 MB）
+  - `PermissionStatus` 枚举：granted / denied / permanentlyDenied
+- `MainActivity.kt` 扩展为双 MethodChannel（`com.smart_eye/audio` + `com.smart_eye/permission`）
+  - `checkCamera`：`ContextCompat.checkSelfPermission` + `shouldShowRequestPermissionRationale` 联合判断永久拒绝
+  - `requestCamera`：`ActivityCompat.requestPermissions` + `onRequestPermissionsResult` 回调
+  - `openAppSettings`：`Settings.ACTION_APPLICATION_DETAILS_SETTINGS` 跳转
+- `HomeScreen._initialize()` 启动时**先**检查权限，无权限直接早返回
+- `HomeScreen._initCameraWithRetry()` 失败后**追加**一次权限状态检查并语音播报
+- `HomeScreen._onResumedFromBackground()` 从系统设置返回时自动重检测，权限恢复后自动重初始化相机
+- 单击重听 / 双击导出日志：永久拒绝时不再静默，改为播报"请去设置开启摄像头权限"
+
+### Added
+- 3 个语音素材（`assets/audio/perm_*.mp3` + `opening_settings.mp3`，合计 85 KB）
+  - `perm_denied.mp3`「应用未获得摄像头权限。请在系统设置中开启摄像头权限，然后重新打开应用」
+  - `perm_permanently_denied.mp3`「摄像头权限已被永久拒绝。请进入系统设置，在应用中开启摄像头权限」
+  - `opening_settings.mp3`「正在打开系统设置」
+- 14 个单元测试（117 → 103 + 14）：
+  - `test/unit/services/permission_service_test.dart`（7 个）：default platform / 检查 / 请求 / 永久拒绝判断 / 设置跳转
+  - `test/unit/services/tts_service_test.dart` 新增 4 个：3 个新语音方法 + 1 个未初始化时不崩
+  - `test/unit/build_config/build_config_test.dart` 新增 2 个：androidx.core 依赖 + MainActivity handler
+
+### Changed
+- `android/app/build.gradle` 显式添加 `androidx.core:core-ktx:1.13.1`（ContextCompat / ActivityCompat 需要）
+- `assets/audio/` 从 16 个文件 → 19 个文件
+
+### Numbers
+- release APK：30.2 MB → **30.3 MB**（+0.1 MB）
+- 单元测试：103 → **117**（+14）
+- analyze：零警告
+
+### Lessons
+- **视障工具绝不静默失败**：任何异常路径都必须有语音反馈，否则用户只能靠猜
+- **永久拒绝 ≠ 普通拒绝**：系统不再弹窗，必须主动引导去设置页
+- **生命周期感知**：从设置页返回时要自动重试，不要让用户再次走手动重启流程
+
+---
+
 ## [0.7.0] — 2026-07-07
 
 ### Changed
