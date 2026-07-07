@@ -53,6 +53,14 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.debug
+
+            // R8 code shrinking + resource shrinking (enabled in v0.7.0).
+            // - minifyEnabled: removes unused Java/Kotlin code (saves 5-10 MB)
+            // - shrinkResources: removes unused drawable/layout/string resources
+            // - proguardFiles: ML Kit keep rules in proguard-rules.pro must be
+            //   kept up-to-date; see test/unit/build/build_config_test.dart.
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }

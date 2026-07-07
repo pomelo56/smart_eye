@@ -1,6 +1,8 @@
 # AGENTS.md — 慧眼 SmartEye 项目操作手册
 
 > 本文件是写给 AI 编程助手的项目操作手册。包含仓库概览、工具链指令、编码规范、任务路由和边界约束。
+>
+> **接手顺序**：先读 [TASKBOARD.md](./docs/TASKBOARD.md) 看当前冲刺与待办 → 再读本文件 → 最后读 [PROJECT.md](./PROJECT.md) 了解架构决策与已知问题。
 
 ---
 

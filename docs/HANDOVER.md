@@ -15,7 +15,7 @@
 - **核心原则**：无障碍优先、隐私优先、端侧优先、可靠优先
 - **禁止事项**：任何云端 OCR、上传图片、收集位置/设备信息
 
-项目文档：`PRD.md`（需求）、`AGENTS.md`（AI 操作手册）、`SOUL.md`（人格）、`USER.md`（用户画像）、`CHANGELOG.md`（变更日志）、`MEMORY.md`（踩坑）。
+项目文档：`PRD.md`（需求）、`AGENTS.md`（AI 操作手册）、`SOUL.md`（人格）、`USER.md`（用户画像）、`docs/TASKBOARD.md`（多 Agent 任务看板）、`CHANGELOG.md`（变更日志）、`MEMORY.md`（踩坑）。
 
 ---
 
