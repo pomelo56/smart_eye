@@ -9,6 +9,41 @@
 
 ---
 
+## [0.7.2] — 2026-07-07 (无障碍增强：弱光环境)
+
+### Added
+- **弱光自动检测 + 手电自动开启**（v0.7.2 主要特性）
+  - 新增 `lib/services/luminance_detector.dart`：
+    - `LuminanceDetector.analyze()`：YUV420 Y plane 路径（未来 v0.8.0 改用 `startImageStream` 时用）
+    - `LuminanceDetector.analyzeRgba()`：JPEG 解码路径（当前实现，dart:ui 解码 + 8x8 grid 采样）
+    - 亮度阈值：< 40 = `dark`（建议开手电），40-200 = `normal`，> 200 = `bright`
+    - BT.601 luma 权重（0.299 R + 0.587 G + 0.114 B），与人眼感知对齐
+    - 64 像素采样，1280x720 帧 < 5ms
+  - `TorchController`：包装 `CameraController.setFlashMode()`，幂等 + 处理硬件不支持
+  - 3 段语音素材：
+    - `luminance_dim.mp3`「光线较暗，识别可能不准确。正在尝试打开手电」
+    - `torch_on.mp3`「手电已打开」
+    - `torch_failed.mp3`「自动打开手电失败。请从手机通知栏下拉，手动开启手电」
+  - `HomeScreen._maybeHandleLuminance`：
+    - JPEG → dart:ui 解码 → RGBA → 亮度检测
+    - dark 触发：先 `speakLuminanceDim` → `setTorch(true)` → `speakTorchOn`
+    - 8s 冷却防止每帧都播报
+    - 手电已开时不重复提示
+    - 30s 冷却防止 torch 失败时反复 nag
+  - `lifecycle paused` 时自动关手电（防止后台耗电 + 下次开 APP 还在亮）
+  - 19 个新单测（v0.7.1 的 117 → v0.7.2 的 136）
+
+### Changed
+- `HomeScreen._scanFrame` 流程加一步亮度检测（OCR 之前），不动 OCR 逻辑
+- 启动流程不变，但相机初始化成功后创建 `TorchController`
+
+### Notes
+- **不引新依赖**：用 dart:ui 内置 `instantiateImageCodec` + `toByteData(rawRgba)` 解码 JPEG，节省 ~500KB（image 包）
+- **v0.8.0 计划改用 YUV420 stream**：当前是 JPEG 解码路径，720p JPEG 解码要 ~30ms；改 `startImageStream` 后用 Y plane 直接算亮度，< 1ms，且不再需要 JPEG 解码。但要重写扫描流程（v0.8.0 任务）
+- **手电控制权限**：Android 不需要额外权限，`CameraController.setFlashMode(torch)` 在拿到 Camera 时就可用
+
+---
+
 ## [0.7.1] — 2026-07-07 (紧急修复)
 
 ### 🐛 Fixed — 摄像头权限缺失时 APP 静默卡死
