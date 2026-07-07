@@ -9,7 +9,38 @@
 
 ---
 
-## [0.6.2] — 2026-07-06
+## [0.7.0] — 2026-07-07
+
+### Changed
+- **R8 代码压缩启用** — release APK 体积从 31.6 MB 降至 **30.2 MB**（-4%）
+  - `android/app/build.gradle` release 块添加 `minifyEnabled true` + `shrinkResources true`
+  - `classes.dex` 从 8-10 MB 压缩到 4.3 MB
+  - 保留 30 MB 上限：剩余体积主要是 Dart AOT（3.4 MB）、Flutter 引擎（10.7 MB）、ML Kit 中文模型（11.1 MB）三者合计 ~25 MB
+  - 详见 `docs/APK_SIZE_OPTIMIZATION.md` 第三节
+
+### Added
+- `test/unit/build/build_config_test.dart` — 5 个回归测试断言 R8 配置（minifyEnabled / shrinkResources / proguardFiles / ML Kit keep 规则 / MainActivity keep 规则）
+  - 防止未来有人注释掉 R8 配置但 APK 体积悄悄回弹
+- `android/app/proguard-rules.pro` 补全 6 类 keep / dontwarn 规则：
+  - Flutter 引擎反射（`io.flutter.**`）
+  - MainActivity MethodChannel 入口
+  - Kotlin 注解（`kotlin.Metadata`）
+  - Camera2 反射 API
+  - Google Play Split-Install 缺失类抑制（项目走直接 APK 渠道）
+- `docs/TASKBOARD.md` — 多 Agent 协作任务看板
+  - 6 大区块：当前冲刺 / 进行中 / 待开发 / 待修复 / 待验证 / 技术债务
+  - 引用 ROADMAP.md（v0.7.x - v2.0.0）和 PROJECT.md（KI-001 - KI-005、技术债务表）
+  - Agent 接手协议：「先读 TASKBOARD → 再读 AGENTS.md → 再读 PROJECT.md」
+
+### Changed (docs)
+- `AGENTS.md` 顶部添加接手顺序指引
+- `docs/HANDOVER.md` §1 添加 TASKBOARD 引用
+- `VERSION.md` v0.7.0 计划项前移到 v0.7.1（TalkBack / 平台音频 / 真实小票测试）
+
+### Note
+- 体积收益低于 v0.6.1（-1.4 MB vs -34 MB）：剩余 30 MB 大头是引擎 + 模型，无法通过 R8 进一步压缩
+- 真正释放体积的下一步：v0.8.0 计划**懒加载 ML Kit**（首次扫描时再下载中文模型），可省 ~10 MB
+- R8 配置已受单测保护，未来修改 build.gradle 必触发 CI 红灯
 
 ### Changed
 - **Debug APK 体积优化** — `flutter build apk --debug` 体积从 237 MB 降至 **89 MB**（-62%）
