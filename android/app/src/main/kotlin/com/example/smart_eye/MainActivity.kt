@@ -1,27 +1,46 @@
 package com.example.smart_eye
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.AssetFileDescriptor
 import android.media.AudioAttributes
 import android.media.MediaPlayer
+import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * MainActivity exposes a small MethodChannel to play bundled audio assets.
+ * MainActivity exposes two MethodChannels:
+ *  - `com.smart_eye/audio` — plays bundled audio assets (see ADR-001).
+ *  - `com.smart_eye/permission` — handles camera permission checks,
+ *    runtime requests, and opening the app's settings page.
  *
- * This is the fallback voice strategy for OPPO/ColorOS devices where the
- * system's TextToSpeech engine is visible in Settings but cannot be bound by
- * third-party apps.  All speech prompts are pre-recorded and shipped as assets.
+ * The voice strategy is pre-recorded audio rather than the system TTS
+ * engine, because OPPO/ColorOS devices make the TTS engine visible in
+ * Settings but un-bindable by third-party Flutter apps.
  */
 class MainActivity : FlutterActivity() {
     private val channelName = "com.smart_eye/audio"
+    private val permissionChannelName = "com.smart_eye/permission"
+    private val cameraPermissionRequestCode = 4242
     private val mainHandler = Handler(Looper.getMainLooper())
     private val isPlaying = AtomicBoolean(false)
     private lateinit var methodChannel: MethodChannel
+    private lateinit var permissionChannel: MethodChannel
+
+    /// Pending result for the camera permission request, if the user is
+    /// currently being prompted. Set in [requestCameraPermission] and
+    /// resolved in [onRequestPermissionsResult].
+    private var pendingCameraResult: MethodChannel.Result? = null
 
     /// Reference to the currently active MediaPlayer, so stop() can truly halt
     /// playback instead of just flipping a flag.
@@ -52,6 +71,27 @@ class MainActivity : FlutterActivity() {
                 }
                 "isPlaying" -> {
                     result.success(isPlaying.get())
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // Permission channel — added in v0.7.1 to fix the silent startup
+        // failure when the user has not granted camera access.
+        permissionChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            permissionChannelName
+        )
+        permissionChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "checkCamera" -> {
+                    result.success(currentCameraPermissionStatus())
+                }
+                "requestCamera" -> {
+                    requestCameraPermission(result)
+                }
+                "openAppSettings" -> {
+                    result.success(openAppSettings())
                 }
                 else -> result.notImplemented()
             }
@@ -164,5 +204,109 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         stopPlayback()
         super.onDestroy()
+    }
+
+    // ============================================================
+    // Camera permission handling (v0.7.1)
+    // ============================================================
+
+    /**
+     * Returns the current camera permission status as a string compatible
+     * with the Dart-side [PermissionStatus] enum.
+     *
+     * Values: "granted", "denied", "permanently_denied".
+     *
+     * The "permanently denied" case is detected by combining the runtime
+     * check with `shouldShowRequestPermissionRationale`. If the runtime
+     * check returns PERMISSION_DENIED *and* the user has not selected
+     * "Don't ask again", `shouldShowRequestPermissionRationale` returns
+     * true on the next request. When it returns false, we know the
+     * dialog will not be shown again and the only path is the system
+     * settings page.
+     */
+    private fun currentCameraPermissionStatus(): String {
+        val granted = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) return "granted"
+
+        val rationale = ActivityCompat.shouldShowRequestPermissionRationale(
+            this, Manifest.permission.CAMERA
+        )
+        // If rationale is false and we don't have the permission, the
+        // user has previously selected "Don't ask again" (or it's the
+        // first launch on API < 23). We treat this as permanently denied
+        // for app purposes: the system dialog won't help, route to
+        // settings.
+        return if (rationale) "denied" else "permanently_denied"
+    }
+
+    /**
+     * Triggers the system permission dialog for the camera.
+     *
+     * If the dialog cannot be shown (e.g. permanently denied), the
+     * result is returned synchronously. Otherwise, [pendingCameraResult]
+     * is held and the final result is delivered in
+     * [onRequestPermissionsResult].
+     */
+    private fun requestCameraPermission(result: MethodChannel.Result) {
+        val granted = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            result.success("granted")
+            return
+        }
+
+        if (pendingCameraResult != null) {
+            // A request is already in flight; tell Dart to wait rather
+            // than than firing a second dialog and losing track of the
+            // first result.
+            result.success("denied")
+            return
+        }
+
+        pendingCameraResult = result
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.CAMERA),
+            cameraPermissionRequestCode
+        )
+    }
+
+    /**
+     * Opens the app's settings page so the user can manually grant the
+     * camera permission.
+     *
+     * Returns true if the settings activity was launched; false if the
+     * platform refused to start it.
+     */
+    private fun openAppSettings(): Boolean {
+        return try {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            intent.data = Uri.fromParts("package", packageName, null)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("SmartEye", "openAppSettings failed: ${e.message}")
+            false
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != cameraPermissionRequestCode) return
+
+        val pending = pendingCameraResult ?: return
+        pendingCameraResult = null
+
+        // Re-evaluate using the same logic as the synchronous check so
+        // the Dart side sees a consistent state.
+        pending.success(currentCameraPermissionStatus())
     }
 }

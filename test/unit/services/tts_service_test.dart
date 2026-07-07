@@ -282,4 +282,58 @@ void main() {
       expect(ok, isFalse);
     });
   });
+
+  group('TtsService camera permission prompts (v0.7.1)', () {
+    test('speakCameraPermissionDenied plays the denied prompt', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+
+      await service.speakCameraPermissionDenied();
+
+      expect(audio.playedPaths, ['assets/audio/perm_denied.mp3']);
+    });
+
+    test('speakCameraPermissionPermanentlyDenied plays the permanent prompt',
+        () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+
+      await service.speakCameraPermissionPermanentlyDenied();
+
+      expect(
+        audio.playedPaths,
+        ['assets/audio/perm_permanently_denied.mp3'],
+      );
+    });
+
+    test('speakOpeningSettings plays the opening-settings chime', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+
+      await service.speakOpeningSettings();
+
+      expect(audio.playedPaths, ['assets/audio/opening_settings.mp3']);
+    });
+
+    test('camera permission prompts are no-ops when audio is not initialized',
+        () async {
+      // Critical: if the audio engine fails to start, the permission flow
+      // must not crash. The user already can't see the screen, so silently
+      // doing nothing is the same as loud failure — the prompt won't help
+      // either way. We just want no exception.
+      final audio = MockAudioService();
+      audio.setInitialized(false);
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+
+      await service.speakCameraPermissionDenied();
+      await service.speakCameraPermissionPermanentlyDenied();
+      await service.speakOpeningSettings();
+
+      expect(audio.playedPaths, isEmpty);
+    });
+  });
 }

@@ -75,5 +75,42 @@ void main() {
             'enough, so we keep it explicitly.',
       );
     });
+
+    test('androidx.core is declared for the camera permission flow', () {
+      // v0.7.1 uses ContextCompat.checkSelfPermission and
+      // ActivityCompat.requestPermissions in MainActivity.kt. Without
+      // this dependency, the Kotlin code fails to compile.
+      expect(
+        buildGradle,
+        contains('androidx.core:core-ktx'),
+        reason: 'MainActivity uses ContextCompat / ActivityCompat. The '
+            'core-ktx dependency must be declared explicitly so the '
+            'permission channel compiles.',
+      );
+    });
+
+    test('MainActivity registers the permission MethodChannel handler', () {
+      // The handler in MainActivity.kt maps to the Dart side's
+      // com.smart_eye/permission channel. If someone removes it, the
+      // PermissionService silently reports "unknown" and the user sees
+      // no feedback when the camera is denied.
+      final mainActivity = File(
+        'android/app/src/main/kotlin/com/example/smart_eye/MainActivity.kt',
+      ).readAsStringSync();
+      expect(
+        mainActivity,
+        contains('com.smart_eye/permission'),
+        reason: 'The v0.7.1 camera permission flow requires the '
+            'permission MethodChannel in MainActivity. Removing this '
+            'string silences the permission prompts entirely.',
+      );
+      expect(
+        mainActivity,
+        contains('openAppSettings'),
+        reason: 'The user must be able to navigate to the system '
+            'settings page to manually grant a permanently denied '
+            'permission.',
+      );
+    });
   });
 }

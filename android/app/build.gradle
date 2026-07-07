@@ -73,4 +73,8 @@ flutter {
 dependencies {
     // Chinese text recognition model for ML Kit (required for platform detection)
     implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
+
+    // AndroidX core for ContextCompat / ActivityCompat (used by the
+    // v0.7.1 camera permission flow in MainActivity.kt).
+    implementation 'androidx.core:core-ktx:1.13.1'
 }

@@ -141,6 +141,29 @@ class TtsService {
     await _audioService.playAssets(['assets/audio/no_history.mp3']);
   }
 
+  /// Plays the prompt that camera permission is denied (first-time denial,
+  /// the user can still grant it via the system dialog).
+  Future<void> speakCameraPermissionDenied() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/perm_denied.mp3']);
+  }
+
+  /// Plays the prompt that camera permission has been permanently denied
+  /// (user selected "Don't ask again" or revoked from settings). The
+  /// only recovery path is to open the app's settings page manually.
+  Future<void> speakCameraPermissionPermanentlyDenied() async {
+    if (!_isInitialized) return;
+    await _audioService
+        .playAssets(['assets/audio/perm_permanently_denied.mp3']);
+  }
+
+  /// Plays a short "opening settings now" chime before launching the
+  /// system settings app.
+  Future<void> speakOpeningSettings() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/opening_settings.mp3']);
+  }
+
   /// Plays a list of audio clips directly.
   ///
   /// Used for direction guidance and other dynamic clip sequences

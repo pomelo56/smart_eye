@@ -11,6 +11,7 @@ import '../models/scan_result.dart';
 import '../services/file_logger.dart';
 import '../services/history_service.dart';
 import '../services/ocr_service.dart';
+import '../services/permission_service.dart';
 import '../services/tts_service.dart';
 
 /// Main screen for the SmartEye MVP.
@@ -32,6 +33,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final TextRecognizer _textRecognizer =
       TextRecognizer(script: TextRecognitionScript.chinese);
   final FileLogger _logger = FileLogger.instance;
+  final PermissionService _permissionService = PermissionService();
+
+  /// True if the user has permanently denied camera permission and the
+  /// only path forward is the system settings page. When this is set,
+  /// we stop retrying camera initialization and surface the "permanently
+  /// denied" prompt on every entry to the screen.
+  bool _permissionPermanentlyDenied = false;
 
   bool _isCameraReady = false;
   bool _isProcessing = false;
@@ -79,10 +87,84 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final prefs = await SharedPreferences.getInstance();
     _historyService = HistoryService(prefs: prefs);
 
+    // Camera permission check must run BEFORE the first-launch tutorial
+    // so a permanently denied user hears the "open settings" prompt
+    // instead of a tutorial they can't act on. The tutorial only
+    // proceeds if the camera is eventually usable.
+    final hasPermission = await _ensureCameraPermission();
+    if (!hasPermission) {
+      _log('启动中止: 无摄像头权限');
+      _log('=== 启动完成 (无权限) ===');
+      return;
+    }
+
     await _checkFirstLaunch();
     await _initCameraWithRetry();
 
     _log('=== 启动完成 ===');
+  }
+
+  /// Ensures the camera permission is granted before the rest of the app
+  /// starts talking to the camera.
+  ///
+  /// Returns true if permission is granted (or was just granted), false
+  /// if the user denied it. When denied, the screen speaks the
+  /// appropriate prompt and, if the denial is permanent, opens the
+  /// system settings page.
+  ///
+  /// v0.7.1: this is the fix for the silent startup failure where the
+  /// app would log "camera not available" repeatedly with no audio
+  /// feedback. Visually impaired users would think the app was broken.
+  Future<bool> _ensureCameraPermission() async {
+    var status = await _permissionService.checkCameraPermission();
+    _log('初始权限状态: $status');
+
+    if (status == PermissionStatus.granted) {
+      return true;
+    }
+
+    if (status == PermissionStatus.unknown) {
+      // The MethodChannel wasn't wired up (e.g. running on a host with
+      // no MainActivity). Fall back to asking the system dialog anyway
+      // — if it doesn't exist, the request will be a no-op and we'll
+      // fail through to the camera retry loop, which already handles
+      // CameraException gracefully.
+      status = await _permissionService.requestCameraPermission();
+      _log('权限请求 (fallback): $status');
+    }
+
+    if (status == PermissionStatus.granted) {
+      return true;
+    }
+
+    // Permission is denied. Speak the prompt and decide the recovery path.
+    if (status == PermissionStatus.permanentlyDenied) {
+      _permissionPermanentlyDenied = true;
+      await _ttsService.stop();
+      await _ttsService.speakCameraPermissionPermanentlyDenied();
+      // Try to open settings immediately. If the user grants the
+      // permission and returns to the app, [didChangeAppLifecycleState]
+      // will retry the camera.
+      final opened = await _permissionService.openAppSettings();
+      _log('永久拒绝: 跳转设置=$opened');
+    } else {
+      // First-time or normal denial: ask the system once, then guide.
+      await _ttsService.stop();
+      await _ttsService.speakCameraPermissionDenied();
+      status = await _permissionService.requestCameraPermission();
+      _log('权限请求结果: $status');
+
+      if (status == PermissionStatus.granted) {
+        return true;
+      }
+      if (status == PermissionStatus.permanentlyDenied) {
+        _permissionPermanentlyDenied = true;
+        await _ttsService.speakCameraPermissionPermanentlyDenied();
+        await _permissionService.openAppSettings();
+      }
+    }
+
+    return false;
   }
 
   Future<void> _checkFirstLaunch() async {
@@ -118,6 +200,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     }
     _log('相机不可用');
+
+    // v0.7.1: when the camera cannot be initialized, check whether the
+    // cause is a missing permission. If so, surface a clear voice
+    // prompt. Without this, the app used to log "camera unavailable"
+    // and go silent, leaving the user with no audio feedback at all.
+    final status = await _permissionService.checkCameraPermission();
+    if (status == PermissionStatus.denied) {
+      await _ttsService.speakCameraPermissionDenied();
+    } else if (status == PermissionStatus.permanentlyDenied) {
+      _permissionPermanentlyDenied = true;
+      await _ttsService.speakCameraPermissionPermanentlyDenied();
+    }
   }
 
   Future<bool> _initCamera() async {
@@ -673,6 +767,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _exportLogs() async {
     _log('手势: 双击导出日志');
+    // v0.7.1: if the camera never came up because permission was
+    // permanently denied, a double-tap (which would normally export
+    // logs) should re-surface the permission prompt instead. Without
+    // this, the user has no audio feedback that the app is in a
+    // permission-denied state — they would just hear "日志导出成功"
+    // even though the camera is dead.
+    if (_permissionPermanentlyDenied) {
+      await _ttsService.speakCameraPermissionPermanentlyDenied();
+      return;
+    }
     final path = await _logger.exportToDownloads();
     if (path != null) {
       await _ttsService.speak('日志已导出到下载目录');
@@ -726,7 +830,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (mounted) setState(() => _isCameraReady = false);
     } else if (state == AppLifecycleState.resumed) {
       _log('应用恢复前台');
-      _initCameraWithRetry();
+      // v0.7.1: if the user came back from the system settings page
+      // (where they just granted camera permission), re-check the
+      // permission and reinitialize the camera. The previous code
+      // unconditionally called _initCameraWithRetry, which would
+      // re-enter the failure loop if the permission was still denied.
+      _onResumedFromBackground();
+    }
+  }
+
+  /// Handler for the app returning to the foreground.
+  ///
+  /// The two cases we care about are:
+  /// 1. The user just granted camera permission in the system settings
+  ///    page (after a permanent denial). In this case we want to clear
+  ///    the [_permissionPermanentlyDenied] flag and retry the camera.
+  /// 2. The user briefly switched apps. The camera should be re-opened
+  ///    exactly as before.
+  Future<void> _onResumedFromBackground() async {
+    if (_permissionPermanentlyDenied) {
+      final status = await _permissionService.checkCameraPermission();
+      _log('恢复后权限状态: $status');
+      if (status == PermissionStatus.granted) {
+        _permissionPermanentlyDenied = false;
+        _log('权限恢复，重新初始化相机');
+        await _initCameraWithRetry();
+      } else {
+        // Still denied. Re-surface the prompt so the user knows what
+        // to do. We avoid opening settings again automatically, because
+        // a quick app switch should not bounce the user out of their
+        // current task.
+        await _ttsService.stop();
+        await _ttsService.speakCameraPermissionPermanentlyDenied();
+      }
+    } else {
+      await _initCameraWithRetry();
     }
   }
 

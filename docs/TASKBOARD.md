@@ -126,6 +126,21 @@
 
 > 保留最近一个月用于回溯。超过一个月的归档到 `docs/CHANGELOG.md`。
 
+### v0.7.1 (2026-07-07)
+
+- [x] **紧急修复**：摄像头权限缺失时 APP 静默卡死（视障用户无任何反馈）
+  - 新增 `PermissionService`（不引入 `permission_handler` 依赖，节省 ~2 MB）
+  - MainActivity 扩展为双 MethodChannel（`com.smart_eye/permission`）
+  - 3 段新语音：`perm_denied.mp3` / `perm_permanently_denied.mp3` / `opening_settings.mp3`
+  - 14 个新单测（103 → 117）
+
+### v0.7.0 (2026-07-07)
+
+- [x] R8 代码压缩启用（release 31.6 MB → 30.2 MB）
+- [x] `proguard-rules.pro` 补全 6 类 keep / dontwarn 规则
+- [x] `test/unit/build_config/build_config_test.dart` 5 个回归测试
+- [x] `docs/TASKBOARD.md` 多 Agent 任务看板
+
 ### v0.6.2 (2026-07-06)
 
 - [x] Debug APK 体积优化 237 MB → 89 MB（-62%）

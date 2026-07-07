@@ -173,6 +173,20 @@ adb connect IP:端口     # 重新连接一个
 
 ---
 
+### KI-006: PermissionService 未来第三方 plugin 接入陷阱（v0.7.1 引入）
+
+**严重级别**: 🟡 中
+
+**症状**: 未来接入新的 Flutter 插件（如 `flutter_bluetooth_serial`、`local_auth`）时，新插件也用 `Permission` 类时可能出现命名冲突。
+
+**根因**: v0.7.1 自定义了 `PermissionStatus` 枚举（不引入 `permission_handler`），类型名为 `PermissionStatus` 而非第三方库的 `PermissionStatus`。如果未来真要引入 `permission_handler`，需要将本项目的枚举重命名为 `CameraPermissionStatus` 避免冲突。
+
+**解决方案**:
+- 短期内（v0.7.x）保持 `PermissionStatus` 命名，不引入 `permission_handler`
+- 如果 v1.0.0 需要 `permission_handler`（云端 LLM 阶段可能用到 `READ_PHONE_STATE` 等），全局重命名为 `CameraPermissionStatus`
+
+---
+
 ## 3. 技术债务
 
 | 债务项 | 优先级 | 说明 |
