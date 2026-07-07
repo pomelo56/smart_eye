@@ -336,4 +336,50 @@ void main() {
       expect(audio.playedPaths, isEmpty);
     });
   });
+
+  group('TtsService luminance and torch prompts (v0.7.2)', () {
+    test('speakLuminanceDim plays the dim-light prompt', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+
+      await service.speakLuminanceDim();
+
+      expect(audio.playedPaths, ['assets/audio/luminance_dim.mp3']);
+    });
+
+    test('speakTorchOn plays the torch-on chime', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+
+      await service.speakTorchOn();
+
+      expect(audio.playedPaths, ['assets/audio/torch_on.mp3']);
+    });
+
+    test('speakTorchFailed plays the torch-failed prompt', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+
+      await service.speakTorchFailed();
+
+      expect(audio.playedPaths, ['assets/audio/torch_failed.mp3']);
+    });
+
+    test('luminance prompts are no-ops when audio is not initialized',
+        () async {
+      final audio = MockAudioService();
+      audio.setInitialized(false);
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+
+      await service.speakLuminanceDim();
+      await service.speakTorchOn();
+      await service.speakTorchFailed();
+
+      expect(audio.playedPaths, isEmpty);
+    });
+  });
 }

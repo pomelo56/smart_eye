@@ -164,6 +164,34 @@ class TtsService {
     await _audioService.playAssets(['assets/audio/opening_settings.mp3']);
   }
 
+  /// Plays the "lighting is dim, opening torch" prompt (v0.7.2).
+  ///
+  /// This prompt is chained before the torch control so the user knows
+  /// what is happening — they do not see the screen light up. The
+  /// 8-second cooldown on the caller side prevents this prompt from
+  /// repeating on every frame.
+  Future<void> speakLuminanceDim() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/luminance_dim.mp3']);
+  }
+
+  /// Plays a short confirmation that the torch was turned on.
+  ///
+  /// Spoken *after* the [speakLuminanceDim] prompt so the user gets a
+  /// clear "the system did what you asked" feedback.
+  Future<void> speakTorchOn() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/torch_on.mp3']);
+  }
+
+  /// Plays the prompt for when the device refused to enable the torch
+  /// (some hardware does not support it). Tells the user to enable the
+  /// flashlight from the notification shade.
+  Future<void> speakTorchFailed() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/torch_failed.mp3']);
+  }
+
   /// Plays a list of audio clips directly.
   ///
   /// Used for direction guidance and other dynamic clip sequences

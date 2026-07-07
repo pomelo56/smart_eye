@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/scan_result.dart';
 import '../services/file_logger.dart';
 import '../services/history_service.dart';
+import '../services/luminance_detector.dart';
 import '../services/ocr_service.dart';
 import '../services/permission_service.dart';
 import '../services/tts_service.dart';
@@ -34,12 +35,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       TextRecognizer(script: TextRecognitionScript.chinese);
   final FileLogger _logger = FileLogger.instance;
   final PermissionService _permissionService = PermissionService();
+  TorchController? _torchController;
 
   /// True if the user has permanently denied camera permission and the
   /// only path forward is the system settings page. When this is set,
   /// we stop retrying camera initialization and surface the "permanently
   /// denied" prompt on every entry to the screen.
   bool _permissionPermanentlyDenied = false;
+
+  /// Cooldown timer for the "lighting is dim" voice prompt (v0.7.2).
+  /// The detector runs on every frame; without a cooldown the prompt
+  /// would play every 2 seconds and bury the actual scan feedback.
+  DateTime? _lastDimPromptTime;
+  static const _dimPromptCooldown = Duration(seconds: 8);
+
+  /// Cooldown timer for the "torch failed" prompt so a persistently
+  /// failing device does not keep repeating the instruction.
+  DateTime? _lastTorchFailedTime;
+  static const _torchFailedCooldown = Duration(seconds: 30);
+
+  /// True while we are mid-prompt for the dim-light case. Prevents
+  /// the next frame from interrupting the prompt with another action.
+  bool _isHandlingDimLight = false;
 
   bool _isCameraReady = false;
   bool _isProcessing = false;
@@ -249,6 +266,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           .initialize()
           .timeout(const Duration(seconds: 15));
       _log('相机就绪 (${backCamera.lensDirection})');
+      // Wire the torch controller. It is a thin wrapper that knows
+      // how to translate our boolean intent into FlashMode calls and
+      // how to handle hardware that does not support torch.
+      _torchController = TorchController(controller: _cameraController!);
       if (mounted) {
         setState(() => _isCameraReady = true);
         _startScanning();
@@ -259,6 +280,105 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _cameraController?.dispose();
       _cameraController = null;
       return false;
+    }
+  }
+
+  /// Inspects a captured JPEG for low-light conditions and, if the
+  /// scene is too dark, plays a voice prompt and turns the torch on
+  /// (v0.7.2).
+  ///
+  /// The detector runs on a downsampled RGBA buffer — never the full
+  /// 720p frame — so the cost is in the low single-digit milliseconds
+  /// even on a mid-range Android. The function is safe to call on
+  /// every frame: the 8-second cooldown on the voice prompt and the
+  /// idempotent [TorchController.setTorch] keep the user experience
+  /// from being noisy.
+  ///
+  /// We deliberately exit early when the torch is already on: a frame
+  /// captured under torch light will still look "dark" if the phone
+  /// is pointed at a black countertop, and the user has already
+  /// received the prompt — we must not repeat it.
+  Future<void> _maybeHandleLuminance(XFile jpeg) async {
+    if (_torchController == null) return;
+    if (_torchController!.isOn) {
+      // Already lit. The remaining concern is "too bright", which we
+      // do not auto-react to (the user can just turn the torch off).
+      return;
+    }
+
+    final result = await _analyzeJpegLuminance(jpeg);
+    if (!result.shouldSuggestTorch) return;
+
+    // Cooldown: don't repeat the "lighting is dim" prompt more than
+    // once every 8 seconds, even if the user is in a dungeon.
+    final now = DateTime.now();
+    if (_lastDimPromptTime != null &&
+        now.difference(_lastDimPromptTime!) < _dimPromptCooldown) {
+      return;
+    }
+    _lastDimPromptTime = now;
+
+    _isHandlingDimLight = true;
+    try {
+      await _ttsService.stop();
+      await _ttsService.speakLuminanceDim();
+      final ok = await _torchController!.setTorch(true);
+      if (ok) {
+        await _ttsService.speakTorchOn();
+        _log('亮度 ${result.luminance}/255 → 已自动开手电');
+      } else {
+        // 30-second cooldown so a device that does not support torch
+        // does not get the same nag every 8 seconds.
+        final last = _lastTorchFailedTime;
+        if (last == null ||
+            DateTime.now().difference(last) >= _torchFailedCooldown) {
+          _lastTorchFailedTime = DateTime.now();
+          await _ttsService.speakTorchFailed();
+        }
+        _log('亮度 ${result.luminance}/255 → 手电开启失败 (硬件不支持?)');
+      }
+    } catch (e, st) {
+      _log('亮度处理异常: $e\n$st');
+    } finally {
+      _isHandlingDimLight = false;
+    }
+  }
+
+  /// Decodes a JPEG file to RGBA8888 and returns its luminance.
+  ///
+  /// Returns a "dark" result on any decoding error — that is the safe
+  /// default for a prompt: better to nag the user about lighting than
+  /// to silently fail.
+  Future<LuminanceResult> _analyzeJpegLuminance(XFile jpeg) async {
+    try {
+      final bytes = await File(jpeg.path).readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      try {
+        final rgba = await image.toByteData(
+          format: ui.ImageByteFormat.rawRgba,
+        );
+        if (rgba == null) {
+          return const LuminanceResult(
+            luminance: 0,
+            bucket: LuminanceBucket.dark,
+          );
+        }
+        return LuminanceDetector.analyzeRgba(
+          rgbaBytes: rgba.buffer.asUint8List(),
+          width: image.width,
+          height: image.height,
+        );
+      } finally {
+        image.dispose();
+      }
+    } catch (e) {
+      _log('JPEG 解码失败: $e');
+      return const LuminanceResult(
+        luminance: 0,
+        bucket: LuminanceBucket.dark,
+      );
     }
   }
 
@@ -273,6 +393,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Skip scanning while announcing to prevent audio overlap.
     if (_isAnnouncing ||
         _isProcessing ||
+        _isHandlingDimLight ||
         _cameraController == null ||
         !_cameraController!.value.isInitialized) {
       return;
@@ -281,6 +402,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _isProcessing = true;
     try {
       final image = await _cameraController!.takePicture();
+
+      // v0.7.2: low-light detection runs on the Y plane of the captured
+      // YUV420 image. The Y plane is grayscale and is the right input
+      // for a "can the user see this" check. If the frame is too dark,
+      // we prompt the user and turn the torch on *before* OCR — this
+      // way subsequent frames will be lit and OCR will succeed.
+      await _maybeHandleLuminance(image);
 
       // Read actual image dimensions for accurate position calculation.
       // The captured image may be in sensor-native (landscape) orientation
@@ -825,8 +953,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
       _scanTimer?.cancel();
+      // v0.7.2: turn the torch off when the app goes background. Leaving
+      // it on would drain battery and could surprise the user the next
+      // time they open the camera app. Best-effort — the camera is
+      // about to be disposed anyway.
+      if (_torchController?.isOn ?? false) {
+        // We deliberately do not await this: the activity is already
+        // tearing down, and the camera plugin will release the flash
+        // when the controller is disposed. We just want the state
+        // to be coherent for the next launch.
+        unawaited(_torchController!.setTorch(false));
+      }
       _cameraController?.dispose();
       _cameraController = null;
+      _torchController = null;
       if (mounted) setState(() => _isCameraReady = false);
     } else if (state == AppLifecycleState.resumed) {
       _log('应用恢复前台');
