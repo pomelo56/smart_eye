@@ -2,7 +2,13 @@
 
 > AI 视障寻物助手 | TRAE AI 创造力大赛 · 社会服务赛道
 
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
+[![Version](https://img.shields.io/badge/version-v0.6.2-blue)](./VERSION.md)
+[![Platform: Android](https://img.shields.io/badge/platform-Android-green)](./docs/无线调试安装APK.md)
+
 面向视障人群的端侧 AI 寻物辅助工具。用户打开摄像头对准物品，AI 实时识别并通过语音播报结果，帮助视障用户"听见物品、找到东西"。
+
+本项目基于 **Apache License 2.0** 开源，详见 [LICENSE](./LICENSE)。
 
 ## 核心功能
 
