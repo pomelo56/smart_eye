@@ -25,6 +25,7 @@
   3. 私有 `test/.../xxx_test.dart` 覆盖新逻辑
   4. `CHANGELOG.md` / `VERSION.md` 同步
   5. 涉及用户面变更的，语音反馈已录制并注册到 `TtsService._mapTextToAssets`
+  6. **NSF 红线（No Silent Failure）**：所有异常分支（`catch` / 失败状态判断 / MethodChannel 异常返回）必须调用 `TtsService.speakXxx()`，无任何静默失败（见 `PROJECT.md` ADR-005 / `AGENTS.md` §5.3）
 
 ---
 
@@ -44,6 +45,7 @@
 
 | 任务 | 优先级 | 目标版本 | 备注 |
 |------|--------|----------|------|
+| NSF 红线全量审计：扫所有 `catch` 块和 `if (... == X) { ... }` 失败分支，确认有 TtsService 播报 | P0 | v0.7.3 | 由 ADR-005 触发；可能有 OCR 失败 / 历史记录写失败 / 文件删除失败等未覆盖路径 |
 | 设置页面（双击右上角唤出，API Key 配置等） | P1 | v0.7.0 | ROADMAP 中 v0.7.0 主目标；本期只做入口壳 + API Key 输入框 |
 | TalkBack 焦点兼容性测试 | P2 | v0.7.0 | 在设置页加 Semantics 后用 TalkBack 走一遍 |
 | `ProjectStructure` 文档同步：补充 `test/build_config_test.dart` | P3 | v0.7.0 | — |

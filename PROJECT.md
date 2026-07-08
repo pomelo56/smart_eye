@@ -80,6 +80,45 @@
 
 ---
 
+### ADR-005: No Silent Failure（NSF）— 异常路径必须有语音反馈
+
+**状态**: 已采纳 (2026-07-08，由 v0.7.1 摄像头权限 bug 触发)
+
+**背景**:
+- 2026-07-07 v0.7.0 发布后用户反馈：摄像头权限被拒时 APP 静默卡死，无任何语音提示，视障用户无法察觉
+- 根因：`HomeScreen._initCameraWithRetry()` 只在 `try/catch` 里 `print` 错误码，没有调用任何 TtsService 方法
+- 同样问题在 v0.7.2 弱光检测中再次出现：`TorchController.setTorch()` 失败时若不调用 `speakTorchFailed()`，用户不知道为何手电没亮
+
+**决策**:
+- **强制规则**：任何异常路径（`catch` 块、`if (status == X)` 失败分支、MethodChannel 异常返回等）必须调用 `TtsService` 播放语音说明发生了什么 + 下一步操作
+- 禁止用以下方式替代语音：
+  - `print('error: $e')` / `debugPrint(...)`
+  - `ScaffoldMessenger.showSnackBar(...)`（视障用户看不到）
+  - `setState(() => _isError = true)` 改变 UI 颜色 / 文字
+  - 仅 `FileLogger.write('ERROR', ...)` 落盘（视障用户不知道有日志）
+- 异常路径的播报模板：「出问题了」+「建议怎么办」（具体可操作步骤）
+- 自检清单 §9.2 强制勾选「异常路径 100% 有语音」
+
+**后果**:
+- ✅ 视障用户永远能听到 APP 在干什么 / 出了什么问题
+- ✅ 推动 Agent 在写异常分支时主动思考"用户怎么知道"
+- ❌ 新增异常场景需要录制新音频（每次约 5 分钟）
+- ❌ 异常分支的代码量增加（必须 `await _ttsService.speakXxx()`）
+
+**历史案例**:
+| 版本 | 触发的 NSF 检查 | 修复方式 |
+|------|----------------|----------|
+| v0.7.1 | 摄像头权限被拒/永久拒绝 | 3 段新音频 + `PermissionService` + MethodChannel |
+| v0.7.2 | 手电硬件不支持 | `speakTorchFailed()` + 30s 冷却 |
+| v0.8.0 待补 | 媒体音量为 0 | 检测 `AudioManager` 流音量 |
+
+**相关文件**:
+- `lib/services/tts_service.dart` — 所有异常播报的统一入口
+- `lib/screens/home_screen.dart` — 异常分支示例（_ensureCameraPermission、_maybeHandleLuminance）
+- `AGENTS.md` §5.3 / §9.2 — NSF 规范与自检清单
+
+---
+
 ## 2. 已知问题 (Known Issues)
 
 ### KI-001: 音频叠加 — speak() 是 fire-and-forget
