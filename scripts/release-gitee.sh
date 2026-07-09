@@ -40,7 +40,10 @@ extract_changelog() {
         echo "Release $tag"
         return
     fi
-    awk -v target="## [$tag]" '
+    # CHANGELOG 标题格式是 `## [0.7.2]`（无 v 前缀），入参是 v0.7.2，
+    # 所以先剥掉 v 前缀再做模式匹配。
+    local bare="${tag#v}"
+    awk -v target="## [$bare]" '
         $0 ~ target { capture=1; next }
         capture && /^## \[/ { exit }
         capture { print }
@@ -48,7 +51,11 @@ extract_changelog() {
 }
 
 RELEASE_BODY=$(extract_changelog "$VERSION_TAG")
-if [ -z "$RELEASE_BODY" ]; then
+# 如果设置了 GITEE_NOTES_FILE，直接从文件读 release body（优先级最高，
+# 便于传带换行/emoji/引号的中文 markdown note）
+if [ -n "${GITEE_NOTES_FILE:-}" ] && [ -f "$GITEE_NOTES_FILE" ]; then
+    RELEASE_BODY=$(cat "$GITEE_NOTES_FILE")
+elif [ -z "$RELEASE_BODY" ]; then
     RELEASE_BODY="详见 [CHANGELOG.md](https://gitee.com/${GITEE_REPO}/blob/${VERSION_TAG}/CHANGELOG.md)"
 fi
 
