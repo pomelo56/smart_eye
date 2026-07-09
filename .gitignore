@@ -87,5 +87,8 @@ logs/
 .workbuddy/
 design-assets/
 
+# Git worktrees
+.worktrees/
+
 # Git worktree scratch (e.g. release-build/ for back-filling historic APKs)
 release-build/
