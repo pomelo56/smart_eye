@@ -65,7 +65,11 @@ extract_changelog() {
 }
 
 RELEASE_BODY=$(extract_changelog "$VERSION_TAG")
-if [ -z "$RELEASE_BODY" ]; then
+# 如果设置了 GITHUB_NOTES_FILE，直接从文件读 release body（优先级最高，
+# 便于传带换行/emoji/引号的中文 markdown note）
+if [ -n "${GITHUB_NOTES_FILE:-}" ] && [ -f "$GITHUB_NOTES_FILE" ]; then
+    RELEASE_BODY=$(cat "$GITHUB_NOTES_FILE")
+elif [ -z "$RELEASE_BODY" ]; then
     RELEASE_BODY="详见 [CHANGELOG.md](https://github.com/${GITHUB_REPO}/blob/${VERSION_TAG}/CHANGELOG.md)"
 fi
 
@@ -84,11 +88,16 @@ if gh release view "$VERSION_TAG" --repo "$GITHUB_REPO" >/dev/null 2>&1; then
                  --clobber)
 else
     echo "📦 创建 GitHub release: $VERSION_TAG"
+    # 把 release 钉死到 tag 指向的 commit（而不是 main 分支当前 HEAD），
+    # 否则下次 main 推进时，这个 release 的 target_commitish 会被自动跟踪，
+    # 破坏 release ↔ commit 的一一对应关系。
+    local target_commit
+    target_commit=$(git rev-list -n 1 "$VERSION_TAG" 2>/dev/null || echo "main")
     UPLOAD_ARGS=(release create "$VERSION_TAG" "$APK_PATH"
                  --repo "$GITHUB_REPO"
                  --title "$VERSION_TAG"
                  --notes "$RELEASE_BODY"
-                 --target main)
+                 --target "$target_commit")
 fi
 
 # ====== 4. 上传 APK ======

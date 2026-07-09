@@ -57,6 +57,23 @@ void main() {
       expect(script, contains('步骤 6'),
           reason: 'release.sh step counter must reach 6');
     });
+
+    test('release-gitee.sh CHANGELOG matcher strips v prefix', () async {
+      // 防止有人写回 ## [v0.7.2]（实际 CHANGELOG 是 ## [0.7.2]）
+      final script = await File(
+              '/Users/pomelo/Project/smart_eye/scripts/release-gitee.sh')
+          .readAsString();
+      expect(script, contains(r'local bare="${tag#v}"'),
+          reason: 'release-gitee.sh must strip v prefix from CHANGELOG match');
+    });
+
+    test('release-gitee.sh supports GITEE_NOTES_FILE', () async {
+      final script = await File(
+              '/Users/pomelo/Project/smart_eye/scripts/release-gitee.sh')
+          .readAsString();
+      expect(script, contains('GITEE_NOTES_FILE'),
+          reason: 'release-gitee.sh must support GITEE_NOTES_FILE override');
+    });
   });
 
   group('release-github.sh safety', () {
@@ -121,6 +138,30 @@ void main() {
           reason: 'must not call GitHub API via curl with -X (avoids token in argv)');
       expect(script.contains('Authorization'), isFalse,
           reason: 'must not pass Authorization header (token leak risk)');
+    });
+
+    test('supports GITHUB_NOTES_FILE for custom release body', () async {
+      // v0.7.2 release body 修复：必须能传外部 markdown 文件（避免 JSON 转义）
+      final script = await File(
+              '/Users/pomelo/Project/smart_eye/scripts/release-github.sh')
+          .readAsString();
+      expect(script, contains('GITHUB_NOTES_FILE'),
+          reason: 'release-github.sh must support GITHUB_NOTES_FILE override');
+    });
+
+    test('pins release to tag commit (not main HEAD)', () async {
+      // v0.7.2 release target_commitish 修复：必须用 `git rev-list -n 1` 钉到 tag
+      // 指向的 commit，否则 main 推进时 release 会自动跟踪
+      final script = await File(
+              '/Users/pomelo/Project/smart_eye/scripts/release-github.sh')
+          .readAsString();
+      expect(script, contains('git rev-list -n 1'),
+          reason: 'release-github.sh must pin target to tag commit');
+      expect(script.contains('--target "main"'), isFalse,
+          reason:
+              'release-github.sh must not default to "main" (gets auto-tracked)');
+      expect(script.contains('--target main'), isFalse,
+          reason: 'hardcoded --target main is forbidden');
     });
   });
 
