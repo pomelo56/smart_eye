@@ -53,12 +53,12 @@ fi
 
 # ====== 步骤 1: 运行测试 ======
 echo ""
-echo "🧪 步骤 1/4: 运行测试套件..."
+echo "🧪 步骤 1/6: 运行测试套件..."
 ./scripts/test.sh
 
 # ====== 步骤 2: 构建 Release APK ======
 echo ""
-echo "🔨 步骤 2/4: 构建 Release APK..."
+echo "🔨 步骤 2/6: 构建 Release APK..."
 flutter build apk --release
 APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
 APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
@@ -66,7 +66,7 @@ echo "✅ APK 构建完成: $APK_PATH ($APK_SIZE)"
 
 # ====== 步骤 3: 推送到双仓库 ======
 echo ""
-echo "🚀 步骤 3/4: 推送到 GitHub + Gitee..."
+echo "🚀 步骤 3/6: 推送到 GitHub + Gitee..."
 
 # 同步 main 到两个 remote
 echo "   推 main → github..."
@@ -99,7 +99,7 @@ if [ "${RELEASE_INSTALL:-0}" = "1" ]; then
         echo "✅ 已安装到 $DEVICE"
     fi
 else
-    echo "⏭️ 步骤 4/4: 跳过手机安装 (设置 RELEASE_INSTALL=1 启用)"
+    echo "⏭️ 步骤 4/6: 跳过手机安装 (设置 RELEASE_INSTALL=1 启用)"
 fi
 
 # ====== 步骤 5: 可选 - 发布到 Gitee release ======
@@ -113,6 +113,19 @@ else
     echo "⏭️ 跳过 Gitee release 发布 (未设置 GITEE_TOKEN)"
     echo "   设置方法: export GITEE_TOKEN=<你的令牌>"
     echo "   令牌生成: https://gitee.com/personal_access_tokens"
+fi
+
+# ====== 步骤 6: 可选 - 发布到 GitHub release ======
+echo ""
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    echo "📦 发布到 GitHub release (gh CLI 已登录)..."
+    ./scripts/release-github.sh "$VERSION_TAG" "$APK_PATH"
+else
+    echo "⏭️ 跳过 GitHub release 发布 (gh CLI 未登录或未安装)"
+    echo "   登录方法: gh auth login --web  # 弹浏览器"
+    echo "   或:       gh auth login --with-token < token.txt"
+    echo "   验证:     gh auth status"
+    echo "   安装:     brew install gh"
 fi
 
 # ====== 收尾 ======

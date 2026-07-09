@@ -321,6 +321,10 @@ RELEASE_INSTALL=1 ./scripts/release.sh v0.6.2
 # 顺便发布到 Gitee release（需要先设置令牌）
 export GITEE_TOKEN=<你的Gitee私人令牌>
 ./scripts/release.sh v0.6.2
+
+# 顺便发布到 GitHub release（需要 gh CLI 已登录）
+gh auth login --web   # 一次性浏览器登录
+./scripts/release.sh v0.6.2
 ```
 
 **前置条件**：
@@ -328,6 +332,7 @@ export GITEE_TOKEN=<你的Gitee私人令牌>
 - 工作目录必须干净
 - tag 必须符合 `vX.Y.Z` 格式
 - `flutter`、`adb`、`jq`、`curl` 都在 PATH 中
+- GitHub 发布额外需要 `gh` CLI（`brew install gh`）
 
 **release.sh 流程**：
 1. 跑 `./scripts/test.sh`（analyze + format + test）
@@ -335,12 +340,30 @@ export GITEE_TOKEN=<你的Gitee私人令牌>
 3. 推 main + tag 到 github / origin
 4. （可选）安装到 adb 设备
 5. （可选）调 `./scripts/release-gitee.sh` 发 Gitee release
+6. （可选）调 `./scripts/release-github.sh` 发 GitHub release
 
 **Gitee 令牌获取**：
 1. 打开 https://gitee.com/personal_access_tokens
 2. 新建令牌，勾选 `projects` 和 `releases` 两个 scope
 3. `export GITEE_TOKEN=xxx`（**仅当前 shell 会话有效**）
 4. **绝不要** 把令牌写进脚本或 commit 到仓库
+
+**GitHub 登录**（推荐，比 token 字符串更安全）：
+- 浏览器登录：`gh auth login --web`
+- token 登录：`gh auth login --with-token < token.txt`（**token.txt 用完立即删**）
+- 验证：`gh auth status`
+- token 生成：https://github.com/settings/tokens/new 勾选 `repo` scope
+- token 仅存在 `~/.config/gh/hosts.yml`（600 权限），不会进 commit
+
+**GitHub release vs Gitee release 对比**：
+
+| 维度 | GitHub | Gitee |
+|------|--------|-------|
+| 凭证 | `gh auth` 缓存 | `GITEE_TOKEN` 环境变量 |
+| 上传命令 | `gh release upload` | `curl + release_id` |
+| 失败时回滚 | `gh release delete-asset` | 需手动删 + 重新 attach |
+| 国内下载速度 | 慢（被墙） | 快 |
+| 海外下载速度 | 快 | 慢 |
 
 ---
 

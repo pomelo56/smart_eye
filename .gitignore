@@ -86,3 +86,6 @@ logs/
 # Local work files / design assets
 .workbuddy/
 design-assets/
+
+# Git worktree scratch (e.g. release-build/ for back-filling historic APKs)
+release-build/
