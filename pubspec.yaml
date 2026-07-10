@@ -2,7 +2,7 @@ name: smart_eye
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 0.7.3+13
+version: 0.8.0+14
 
 environment:
   sdk: ^3.5.0
@@ -19,6 +19,12 @@ dependencies:
   shared_preferences: ^2.3.2
   # File logger: persistent diagnostics and export
   path_provider: ^2.1.0
+  # HTTP client and download progress for in-app update
+  dio: ^5.7.0
+  # Read local package version for update comparison
+  package_info_plus: ^8.0.2
+  # Detect Wi-Fi connectivity before checking for updates
+  connectivity_plus: ^6.0.5
 
 flutter:
   uses-material-design: true

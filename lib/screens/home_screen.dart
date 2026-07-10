@@ -3,17 +3,24 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/scan_result.dart';
+import '../services/connectivity_service.dart';
+import '../services/download_service.dart';
 import '../services/file_logger.dart';
 import '../services/history_service.dart';
+import '../services/install_service.dart';
 import '../services/luminance_detector.dart';
 import '../services/ocr_service.dart';
 import '../services/permission_service.dart';
 import '../services/tts_service.dart';
+import '../services/update_service.dart';
 
 /// Main screen for the SmartEye MVP.
 ///
@@ -35,7 +42,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       TextRecognizer(script: TextRecognitionScript.chinese);
   final FileLogger _logger = FileLogger.instance;
   final PermissionService _permissionService = PermissionService();
+  final InstallService _installService = InstallService();
   TorchController? _torchController;
+
+  late UpdateService _updateService;
+  late DownloadService _downloadService;
+
+  /// True when an update prompt is active. Swipe up/down are temporarily
+  /// repurposed as confirm/cancel gestures while the prompt is shown.
+  bool _updatePromptActive = false;
+  UpdateInfo? _pendingUpdate;
 
   /// True if the user has permanently denied camera permission and the
   /// only path forward is the system settings page. When this is set,
@@ -104,6 +120,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final prefs = await SharedPreferences.getInstance();
     _historyService = HistoryService(prefs: prefs);
 
+    final packageInfo = await PackageInfo.fromPlatform();
+    _updateService = UpdateService(
+      prefs: prefs,
+      connectivity: ConnectivityService(),
+      dio: Dio(),
+      packageInfo: packageInfo,
+    );
+    _downloadService = DownloadService();
+
     // Camera permission check must run BEFORE the first-launch tutorial
     // so a permanently denied user hears the "open settings" prompt
     // instead of a tutorial they can't act on. The tutorial only
@@ -119,6 +144,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _initCameraWithRetry();
 
     _log('=== 启动完成 ===');
+
+    // In-app update check: weekly, Wi-Fi only, after startup so it does
+    // not delay the camera/tutorial feedback.
+    unawaited(_checkForUpdate());
   }
 
   /// Ensures the camera permission is granted before the rest of the app
@@ -280,6 +309,109 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _cameraController?.dispose();
       _cameraController = null;
       return false;
+    }
+  }
+
+  // ============================================================
+  // In-app update flow (v0.8.0)
+  // ============================================================
+
+  /// Checks for a newer APK once per week on Wi-Fi.
+  ///
+  /// If an update is found, scanning is paused and the user is prompted
+  /// with voice + gestures to confirm the download. Errors are logged and
+  /// swallowed so the update check never breaks the main scanning flow.
+  Future<void> _checkForUpdate() async {
+    try {
+      _log('检查更新开始');
+      final info = await _updateService.checkForUpdate();
+      if (info == null) {
+        _log('检查更新: 无更新或条件不满足');
+        return;
+      }
+
+      _log('发现新版本: ${info.versionName}+${info.versionCode}');
+      if (!mounted) return;
+      setState(() {
+        _updatePromptActive = true;
+        _pendingUpdate = info;
+      });
+      _scanTimer?.cancel();
+
+      await _ttsService.stop();
+      await _ttsService.speakUpdateAvailable();
+      await _ttsService.speakConfirmDownload();
+    } catch (e) {
+      _log('检查更新失败: $e');
+      // Auto-update failures must not nag the user every launch.
+    }
+  }
+
+  /// User confirmed the download via swipe-up while the update prompt
+  /// is active.
+  Future<void> _confirmUpdateDownload() async {
+    final info = _pendingUpdate;
+    if (info == null) return;
+
+    _log('用户确认下载更新');
+    setState(() => _updatePromptActive = false);
+    await _ttsService.stop();
+    await _ttsService.speakDownloading();
+
+    try {
+      final cacheDir = await getTemporaryDirectory();
+      final apkPath = '${cacheDir.path}/smart_eye_update.apk';
+      await _downloadService.downloadApk(info.downloadUrl, apkPath);
+
+      _log('更新包下载完成: $apkPath');
+      await _ttsService.stop();
+      await _ttsService.speakDownloadComplete();
+      await _ttsService.speakInstallPrompt();
+
+      await _installDownloadedApk(apkPath);
+    } catch (e) {
+      _log('下载更新失败: $e');
+      await _ttsService.stop();
+      await _ttsService.speakDownloadFailed();
+      _resumeScanningAfterUpdate();
+    }
+  }
+
+  /// User cancelled the update via swipe-down while the prompt is active.
+  Future<void> _cancelUpdateDownload() async {
+    _log('用户取消更新');
+    setState(() {
+      _updatePromptActive = false;
+      _pendingUpdate = null;
+    });
+    await _ttsService.stop();
+    await _ttsService.speakUpdateCancelled();
+    _resumeScanningAfterUpdate();
+  }
+
+  /// Resumes scanning after the update flow completes or is cancelled.
+  void _resumeScanningAfterUpdate() {
+    if (_isCameraReady && mounted) {
+      _startScanning();
+    }
+  }
+
+  /// Verifies install permission and launches the system installer.
+  Future<void> _installDownloadedApk(String apkPath) async {
+    final canInstall = await _installService.canInstall();
+    if (!canInstall) {
+      _log('无安装权限，引导用户开启');
+      await _ttsService.speakInstallPermissionDenied();
+      await _installService.openInstallSettings();
+      _resumeScanningAfterUpdate();
+      return;
+    }
+
+    final result = await _installService.installApk(apkPath);
+    if (!result.success) {
+      _log('打开安装器失败: ${result.error}');
+      await _ttsService.speakDownloadFailed();
+      _resumeScanningAfterUpdate();
     }
   }
 
@@ -939,6 +1071,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _tapTimer;
 
   void _handleTap() {
+    // Ignore taps while an update prompt is active; the prompt is driven
+    // by swipe gestures to reduce accidental confirmation/cancellation.
+    if (_updatePromptActive) return;
+
     _tapCount++;
     _tapTimer?.cancel();
     _tapTimer = Timer(const Duration(milliseconds: 600), () {
@@ -960,6 +1096,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _handleVerticalDragEnd(DragEndDetails details) {
     final velocity = details.primaryVelocity;
     if (velocity == null) return;
+
+    // During an active update prompt, swipe up confirms the download and
+    // swipe down cancels it. This avoids conflicting with the normal
+    // history/help gestures while the user is making a yes/no decision.
+    if (_updatePromptActive) {
+      if (velocity < -800) {
+        unawaited(_confirmUpdateDownload());
+      } else if (velocity > 800) {
+        unawaited(_cancelUpdateDownload());
+      }
+      return;
+    }
 
     if (velocity < -800) {
       _announceHistory();

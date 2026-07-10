@@ -13,16 +13,20 @@ import android.os.Looper
 import android.provider.Settings
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * MainActivity exposes two MethodChannels:
+ * MainActivity exposes three MethodChannels:
  *  - `com.smart_eye/audio` — plays bundled audio assets (see ADR-001).
  *  - `com.smart_eye/permission` — handles camera permission checks,
  *    runtime requests, and opening the app's settings page.
+ *  - `com.smart_eye/installer` — handles APK install permission and
+ *    launching the system package installer for in-app updates.
  *
  * The voice strategy is pre-recorded audio rather than the system TTS
  * engine, because OPPO/ColorOS devices make the TTS engine visible in
@@ -31,11 +35,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MainActivity : FlutterActivity() {
     private val channelName = "com.smart_eye/audio"
     private val permissionChannelName = "com.smart_eye/permission"
+    private val installerChannelName = "com.smart_eye/installer"
     private val cameraPermissionRequestCode = 4242
     private val mainHandler = Handler(Looper.getMainLooper())
     private val isPlaying = AtomicBoolean(false)
     private lateinit var methodChannel: MethodChannel
     private lateinit var permissionChannel: MethodChannel
+    private lateinit var installerChannel: MethodChannel
 
     /// Pending result for the camera permission request, if the user is
     /// currently being prompted. Set in [requestCameraPermission] and
@@ -92,6 +98,27 @@ class MainActivity : FlutterActivity() {
                 }
                 "openAppSettings" -> {
                     result.success(openAppSettings())
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // Installer channel — added in v0.8.0 for in-app update.
+        installerChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            installerChannelName
+        )
+        installerChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "canRequestPackageInstalls" -> {
+                    result.success(canRequestPackageInstalls())
+                }
+                "openInstallSettings" -> {
+                    result.success(openInstallSettings())
+                }
+                "installApk" -> {
+                    val path = call.argument<String>("path") ?: ""
+                    installApk(path, result)
                 }
                 else -> result.notImplemented()
             }
@@ -308,5 +335,82 @@ class MainActivity : FlutterActivity() {
         // Re-evaluate using the same logic as the synchronous check so
         // the Dart side sees a consistent state.
         pending.success(currentCameraPermissionStatus())
+    }
+
+    // ============================================================
+    // APK installer handling (v0.8.0)
+    // ============================================================
+
+    /**
+     * Returns whether the app is allowed to request package installs.
+     *
+     * On Android 8.0+ this checks [PackageManager.canRequestPackageInstalls].
+     * On older versions we assume true because there is no equivalent API.
+     */
+    private fun canRequestPackageInstalls(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            packageManager.canRequestPackageInstalls()
+        } else {
+            true
+        }
+    }
+
+    /**
+     * Opens the system screen where the user can allow installs from this app.
+     *
+     * This is required on Android 8.0+ when [canRequestPackageInstalls] returns
+     * false. The user must toggle the setting and return to the app.
+     */
+    private fun openInstallSettings(): Boolean {
+        return try {
+            val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                data = Uri.parse("package:$packageName")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("SmartEye", "openInstallSettings failed: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Launches the system package installer for the APK at [path].
+     *
+     * The file is exposed through a [FileProvider] so the installer can read
+     * it without requiring broad storage permissions. If the app does not yet
+     * have install permission, the result reports "permission_denied" and the
+     * caller should guide the user to [openInstallSettings].
+     */
+    private fun installApk(path: String, result: MethodChannel.Result) {
+        if (!canRequestPackageInstalls()) {
+            result.success(mapOf("success" to false, "error" to "permission_denied"))
+            return
+        }
+
+        val file = File(path)
+        if (!file.exists()) {
+            result.success(mapOf("success" to false, "error" to "file_not_found"))
+            return
+        }
+
+        try {
+            val uri = FileProvider.getUriForFile(
+                this,
+                "$packageName.fileprovider",
+                file
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent)
+            result.success(mapOf("success" to true))
+        } catch (e: Exception) {
+            android.util.Log.e("SmartEye", "installApk failed: ${e.message}")
+            result.success(mapOf("success" to false, "error" to (e.message ?: "unknown")))
+        }
     }
 }

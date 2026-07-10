@@ -392,4 +392,62 @@ class TtsService {
 
     return null;
   }
+
+  // ============================================================
+  // In-app update prompts (v0.8.0)
+  // ============================================================
+
+  /// Speaks the "new version available" prompt.
+  Future<void> speakUpdateAvailable() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/update_available.mp3']);
+  }
+
+  /// Speaks the download confirmation prompt with gesture hints.
+  Future<void> speakConfirmDownload() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/confirm_download.mp3']);
+  }
+
+  /// Speaks the "downloading update" prompt.
+  Future<void> speakDownloading() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/downloading.mp3']);
+  }
+
+  /// Speaks the "download complete" prompt.
+  Future<void> speakDownloadComplete() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/download_complete.mp3']);
+  }
+
+  /// Speaks the "download failed" prompt.
+  Future<void> speakDownloadFailed() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/download_failed.mp3']);
+  }
+
+  /// Speaks the "please confirm install" prompt.
+  Future<void> speakInstallPrompt() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/install_prompt.mp3']);
+  }
+
+  /// Speaks the install-permission-denied prompt with settings guidance.
+  Future<void> speakInstallPermissionDenied() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/install_permission_denied.mp3']);
+  }
+
+  /// Speaks the "please use Wi-Fi" prompt.
+  Future<void> speakWifiOnly() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/wifi_only.mp3']);
+  }
+
+  /// Speaks the "update cancelled" prompt.
+  Future<void> speakUpdateCancelled() async {
+    if (!_isInitialized) return;
+    await _audioService.playAssets(['assets/audio/update_cancelled.mp3']);
+  }
 }

@@ -9,6 +9,57 @@
 
 ---
 
+## [0.8.0] — 2026-07-10 (应用内更新)
+
+### Added
+- **应用内更新**（v0.8.0 主要特性，解决视障用户手动升级困难）
+  - 新增 `UpdateService`：每周一次、仅在 Wi-Fi 下检查 Gitee/GitHub Releases 最新版本
+    - Gitee 主源：`https://gitee.com/api/v5/repos/free-style_2_0/smart_eye/releases/latest`
+    - GitHub 备用源：`https://api.github.com/repos/pomelo56/smart_eye/releases/latest`
+    - 支持从 tag `vX.Y.Z+NNN` 或 release body `versionCode: NNN` 解析 Android `versionCode`
+    - 本地版本不大于远程版本时静默跳过
+  - 新增 `DownloadService`：基于 `dio` 下载 APK，支持进度回调，下载前删除旧包
+  - 新增 `InstallService`：通过 `com.smart_eye/installer` MethodChannel 调用原生安装能力
+  - 新增 `ConnectivityService`：封装 `connectivity_plus`，仅暴露 Wi-Fi 检测，便于测试注入
+  - Android 原生层 `MainActivity.kt` 新增 installer channel：
+    - `canRequestPackageInstalls` / `openInstallSettings` / `installApk`
+    - 使用 `FileProvider` 暴露缓存目录 APK，避免申请 broad storage 权限
+  - AndroidManifest.xml 新增权限：
+    - `INTERNET`（下载）
+    - `REQUEST_INSTALL_PACKAGES`（应用内安装）
+    - `android:allowBackup="false"`（避免缓存导致覆盖安装异常）
+    - `FileProvider` 配置 `androidx.core.content.FileProvider`
+  - 新增 9 段应用内更新语音素材（均注册到 `TtsService`）：
+    - `update_available.mp3`「发现新版本」
+    - `confirm_download.mp3`「上滑确认下载，下滑取消」
+    - `downloading.mp3`「正在下载更新」
+    - `download_complete.mp3`「下载完成」
+    - `download_failed.mp3`「下载失败，请检查网络后重试」
+    - `install_prompt.mp3`「请按提示完成安装」
+    - `install_permission_denied.mp3`「需要允许安装未知应用权限，请前往设置开启」
+    - `wifi_only.mp3`「请在 Wi-Fi 环境下检查更新」
+    - `update_cancelled.mp3`「已取消更新」
+  - `HomeScreen` 接入更新流程：
+    - 启动完成后异步检查更新，不阻塞相机/教程
+    - 发现新版本时暂停扫描，语音播报 + 上滑确认 / 下滑取消
+    - 下载完成后自动打开系统安装器，用户手动完成安装
+  - 新增单元测试：
+    - `update_service_test.dart`：Wi-Fi 条件、7 天节流、版本解析、Gitee 失败回退 GitHub、时间戳记录
+    - `download_service_test.dart`：下载成功、覆盖旧文件、进度回调、异常传播
+    - `install_service_test.dart`：权限检查、设置跳转、安装成功/失败/参数传递
+
+### Changed
+- `pubspec.yaml` 版本升级到 `0.8.0+14`
+- 新增依赖：`dio ^5.7.0`、`package_info_plus ^8.0.2`、`connectivity_plus ^6.0.5`
+
+### Fixed
+- 修复 `MainActivity.kt` installer channel 中 `return try { ... }` 的 Kotlin 语法错误
+- 修复 `TtsService` 更新提示方法调用未定义的 `_playSequence` 问题
+- 适配 `connectivity_plus` 6.x 新 API：`checkConnectivity()` 返回 `List<ConnectivityResult>`
+- 适配 `dio` 5.10.x 抽象类变更：测试 FakeDio 改为继承 `DioForNative`
+
+---
+
 ## [0.7.3] — 2026-07-10 (OCR 模糊匹配)
 
 ### Added
