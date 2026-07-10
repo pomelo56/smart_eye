@@ -53,6 +53,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _updatePromptActive = false;
   UpdateInfo? _pendingUpdate;
 
+  /// Path to a downloaded update APK that is waiting for the user to grant
+  /// the "install unknown apps" permission. When the app returns from the
+  /// system settings page, [didChangeAppLifecycleState] uses this to retry
+  /// the installation automatically.
+  String? _pendingInstallApkPath;
+
+  /// True if we have just sent the user to the system settings page to
+  /// enable the install-unknown-apps permission. Used on resume to detect
+  /// that we should retry the pending installation.
+  bool _installSettingsPending = false;
+
   /// True if the user has permanently denied camera permission and the
   /// only path forward is the system settings page. When this is set,
   /// we stop retrying camera initialization and surface the "permanently
@@ -133,7 +144,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
     _downloadService = DownloadService(
       dio: Dio(BaseOptions(
-        connectTimeout: const Duration(seconds: 10),
+        // GitHub CDN can be slow from mainland China; allow a generous
+        // connection window while keeping a reasonable total timeout.
+        connectTimeout: const Duration(seconds: 30),
         receiveTimeout: const Duration(minutes: 5),
         sendTimeout: const Duration(seconds: 10),
       )),
@@ -362,6 +375,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// User confirmed the download via swipe-up while the update prompt
   /// is active.
+  ///
+  /// If the APK has already been downloaded (e.g. the user previously
+  /// confirmed but did not grant the install permission), skip the
+  /// network request and go straight to the installer prompt.
   Future<void> _confirmUpdateDownload() async {
     final info = _pendingUpdate;
     if (info == null) return;
@@ -369,18 +386,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _log('用户确认下载更新');
     setState(() => _updatePromptActive = false);
     await _ttsService.stop();
-    await _ttsService.speakDownloading();
 
     try {
       final cacheDir = await getTemporaryDirectory();
       final apkPath = '${cacheDir.path}/smart_eye_update.apk';
-      await _downloadService.downloadApk(info.downloadUrl, apkPath);
+      final apkFile = File(apkPath);
 
-      _log('更新包下载完成: $apkPath');
-      await _ttsService.stop();
-      await _ttsService.speakDownloadComplete();
+      if (apkFile.existsSync() && apkFile.lengthSync() > 0) {
+        _log('更新包已存在，跳过下载: $apkPath');
+        await _ttsService.speakDownloadComplete();
+      } else {
+        await _ttsService.speakDownloading();
+        var lastLoggedPercent = -1;
+        await _downloadService.downloadApk(
+          info.downloadUrl,
+          apkPath,
+          onProgress: (progress) {
+            final percent = (progress * 100).toInt();
+            if (percent >= lastLoggedPercent + 10) {
+              lastLoggedPercent = percent;
+              _log('下载进度: $percent%');
+            }
+          },
+        );
+        _log('更新包下载完成: $apkPath');
+        await _ttsService.stop();
+        await _ttsService.speakDownloadComplete();
+      }
+
       await _ttsService.speakInstallPrompt();
-
       await _installDownloadedApk(apkPath);
     } catch (e) {
       _log('下载更新失败: $e');
@@ -410,22 +444,46 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   /// Verifies install permission and launches the system installer.
+  ///
+  /// If the permission is missing, sends the user to system settings and
+  /// remembers the APK path so the installation can be retried when the
+  /// app returns to the foreground.
   Future<void> _installDownloadedApk(String apkPath) async {
+    _pendingInstallApkPath = apkPath;
+
     final canInstall = await _installService.canInstall();
     if (!canInstall) {
       _log('无安装权限，引导用户开启');
       await _ttsService.speakInstallPermissionDenied();
+      _installSettingsPending = true;
       await _installService.openInstallSettings();
-      _resumeScanningAfterUpdate();
       return;
     }
 
+    _installSettingsPending = false;
     final result = await _installService.installApk(apkPath);
     if (!result.success) {
       _log('打开安装器失败: ${result.error}');
+      await _ttsService.stop();
       await _ttsService.speakDownloadFailed();
+      _pendingInstallApkPath = null;
       _resumeScanningAfterUpdate();
     }
+  }
+
+  /// Called when the app returns to the foreground after the user was
+  /// sent to system settings to enable install-unknown-apps permission.
+  ///
+  /// If a downloaded APK is still pending, retries the installation and
+  /// gives clear audio feedback so the user knows what is happening.
+  Future<void> _retryPendingInstall() async {
+    final apkPath = _pendingInstallApkPath;
+    if (apkPath == null || apkPath.isEmpty) return;
+
+    _log('从设置返回，尝试继续安装: $apkPath');
+    await _ttsService.stop();
+    await _ttsService.speakInstallPrompt();
+    await _installDownloadedApk(apkPath);
   }
 
   /// Inspects a captured JPEG for low-light conditions and, if the
@@ -1162,13 +1220,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// Handler for the app returning to the foreground.
   ///
-  /// The two cases we care about are:
+  /// The cases we care about are:
   /// 1. The user just granted camera permission in the system settings
   ///    page (after a permanent denial). In this case we want to clear
   ///    the [_permissionPermanentlyDenied] flag and retry the camera.
-  /// 2. The user briefly switched apps. The camera should be re-opened
+  /// 2. The user just granted the "install unknown apps" permission while
+  ///    we were waiting to install an update. Retry the pending install.
+  /// 3. The user briefly switched apps. The camera should be re-opened
   ///    exactly as before.
   Future<void> _onResumedFromBackground() async {
+    // Install permission case takes priority: if the user returns from
+    // settings after enabling install-unknown-apps, continue the update
+    // flow before touching the camera.
+    if (_installSettingsPending && _pendingInstallApkPath != null) {
+      _installSettingsPending = false;
+      await _retryPendingInstall();
+      return;
+    }
+
     if (_permissionPermanentlyDenied) {
       final status = await _permissionService.checkCameraPermission();
       _log('恢复后权限状态: $status');

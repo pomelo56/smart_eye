@@ -1,0 +1,1650 @@
+慧眼 SmartEye 软件源代码
+版本：v0.8.0
+著作权人：个人
+============================================================
+
+  1 | // ===== FILE: lib/main.dart (32 lines) =====
+  2 | import 'package:flutter/material.dart';
+  3 | import 'package:flutter/services.dart';
+  4 | 
+  5 | import 'screens/home_screen.dart';
+  6 | 
+  7 | void main() {
+  8 |   WidgetsFlutterBinding.ensureInitialized();
+  9 |   // Lock orientation to portrait only
+ 10 |   SystemChrome.setPreferredOrientations([
+ 11 |     DeviceOrientation.portraitUp,
+ 12 |     DeviceOrientation.portraitDown,
+ 13 |   ]);
+ 14 |   runApp(const SmartEyeApp());
+ 15 | }
+ 16 | 
+ 17 | /// Root application widget for smart_eye.
+ 18 | class SmartEyeApp extends StatelessWidget {
+ 19 |   const SmartEyeApp({super.key});
+ 20 | 
+ 21 |   @override
+ 22 |   Widget build(BuildContext context) {
+ 23 |     return MaterialApp(
+ 24 |       title: '慧眼 SmartEye',
+ 25 |       debugShowCheckedModeBanner: false,
+ 26 |       theme: ThemeData(
+ 27 |         brightness: Brightness.dark,
+ 28 |         useMaterial3: true,
+ 29 |       ),
+ 30 |       home: const HomeScreen(),
+ 31 |     );
+ 32 |   }
+ 33 | }
+ 34 | 
+ 35 | // ===== FILE: lib/screens/home_screen.dart (1319 lines) =====
+ 36 | import 'dart:async';
+ 37 | import 'dart:io';
+ 38 | import 'dart:ui' as ui;
+ 39 | 
+ 40 | import 'package:camera/camera.dart';
+ 41 | import 'package:dio/dio.dart';
+ 42 | import 'package:flutter/material.dart';
+ 43 | import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+ 44 | import 'package:package_info_plus/package_info_plus.dart';
+ 45 | import 'package:path_provider/path_provider.dart';
+ 46 | import 'package:shared_preferences/shared_preferences.dart';
+ 47 | 
+ 48 | import '../models/scan_result.dart';
+ 49 | import '../services/connectivity_service.dart';
+ 50 | import '../services/download_service.dart';
+
+============================================================
+第 2 页
+============================================================
+
+  1 | import '../services/file_logger.dart';
+  2 | import '../services/history_service.dart';
+  3 | import '../services/install_service.dart';
+  4 | import '../services/luminance_detector.dart';
+  5 | import '../services/ocr_service.dart';
+  6 | import '../services/permission_service.dart';
+  7 | import '../services/tts_service.dart';
+  8 | import '../services/update_service.dart';
+  9 | 
+ 10 | /// Main screen for the SmartEye MVP.
+ 11 | ///
+ 12 | /// Provides a full-screen touch surface with camera preview, voice feedback,
+ 13 | /// and simple gestures designed for blind/low-vision users.
+ 14 | class HomeScreen extends StatefulWidget {
+ 15 |   const HomeScreen({super.key});
+ 16 | 
+ 17 |   @override
+ 18 |   State<HomeScreen> createState() => _HomeScreenState();
+ 19 | }
+ 20 | 
+ 21 | class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+ 22 |   CameraController? _cameraController;
+ 23 |   late TtsService _ttsService;
+ 24 |   late HistoryService _historyService;
+ 25 |   final OcrService _ocrService = OcrService();
+ 26 |   final TextRecognizer _textRecognizer =
+ 27 |       TextRecognizer(script: TextRecognitionScript.chinese);
+ 28 |   final FileLogger _logger = FileLogger.instance;
+ 29 |   final PermissionService _permissionService = PermissionService();
+ 30 |   final InstallService _installService = InstallService();
+ 31 |   TorchController? _torchController;
+ 32 | 
+ 33 |   late UpdateService _updateService;
+ 34 |   late DownloadService _downloadService;
+ 35 | 
+ 36 |   /// True when an update prompt is active. Swipe up/down are temporarily
+ 37 |   /// repurposed as confirm/cancel gestures while the prompt is shown.
+ 38 |   bool _updatePromptActive = false;
+ 39 |   UpdateInfo? _pendingUpdate;
+ 40 | 
+ 41 |   /// True if the user has permanently denied camera permission and the
+ 42 |   /// only path forward is the system settings page. When this is set,
+ 43 |   /// we stop retrying camera initialization and surface the "permanently
+ 44 |   /// denied" prompt on every entry to the screen.
+ 45 |   bool _permissionPermanentlyDenied = false;
+ 46 | 
+ 47 |   /// Cooldown timer for the "lighting is dim" voice prompt (v0.7.2).
+ 48 |   /// The detector runs on every frame; without a cooldown the prompt
+ 49 |   /// would play every 2 seconds and bury the actual scan feedback.
+ 50 |   DateTime? _lastDimPromptTime;
+
+============================================================
+第 3 页
+============================================================
+
+  1 |   static const _dimPromptCooldown = Duration(seconds: 8);
+  2 | 
+  3 |   /// Cooldown timer for the "torch failed" prompt so a persistently
+  4 |   /// failing device does not keep repeating the instruction.
+  5 |   DateTime? _lastTorchFailedTime;
+  6 |   static const _torchFailedCooldown = Duration(seconds: 30);
+  7 | 
+  8 |   /// True while we are mid-prompt for the dim-light case. Prevents
+  9 |   /// the next frame from interrupting the prompt with another action.
+ 10 |   bool _isHandlingDimLight = false;
+ 11 | 
+ 12 |   bool _isCameraReady = false;
+ 13 |   bool _isProcessing = false;
+ 14 |   bool _isAnnouncing = false; // true while announcing a code; pauses scanning
+ 15 |   String? _lastAnnouncedCode;
+ 16 |   String? _lastDetectedPlatform;
+ 17 |   String? _lastCodePosition; // remembers where the code was last seen
+ 18 |   Timer? _scanTimer;
+ 19 |   bool _feedbackBusy = false;
+ 20 |   DateTime? _ocrLogTimer;
+ 21 |   DateTime? _lastBeepTime; // cooldown for distance feedback beeps
+ 22 |   DateTime? _lastGuidanceTime; // cooldown for direction guidance
+ 23 |   DateTime? _lastTakeoutPromptTime; // cooldown for "发现外卖" prompt
+ 24 | 
+ 25 |   /// Cross-frame code cache: codes seen in the last [_codeCacheWindow].
+ 26 |   /// When a receipt is upside down, OCR may only detect one code per frame.
+ 27 |   /// We merge codes across frames so multi-code scenarios still work.
+ 28 |   final Map<String, _CachedCode> _codeCache = {};
+ 29 |   static const _codeCacheWindow = Duration(seconds: 3);
+ 30 | 
+ 31 |   static const _tutorialKey = 'has_seen_tutorial_v4';
+ 32 | 
+ 33 |   void _log(String msg) {
+ 34 |     _logger.write('INFO', msg);
+ 35 |     // The screen overlay listens to FileLogger.screenBufferNotifier,
+ 36 |     // so no setState is needed here.
+ 37 |   }
+ 38 | 
+ 39 |   @override
+ 40 |   void initState() {
+ 41 |     super.initState();
+ 42 |     WidgetsBinding.instance.addObserver(this);
+ 43 |     _initialize();
+ 44 |   }
+ 45 | 
+ 46 |   Future<void> _initialize() async {
+ 47 |     await _logger.initialize();
+ 48 |     _log('=== 慧眼启动 ===');
+ 49 | 
+ 50 |     _ttsService = TtsService();
+
+============================================================
+第 4 页
+============================================================
+
+  1 |     await _ttsService.initialize();
+  2 |     _log('语音: ${_ttsService.isInitialized ? '就绪' : '未就绪'} '
+  3 |         '引擎=${_ttsService.engineName}');
+  4 | 
+  5 |     final prefs = await SharedPreferences.getInstance();
+  6 |     _historyService = HistoryService(prefs: prefs);
+  7 | 
+  8 |     final packageInfo = await PackageInfo.fromPlatform();
+  9 |     _updateService = UpdateService(
+ 10 |       prefs: prefs,
+ 11 |       connectivity: ConnectivityService(),
+ 12 |       dio: Dio(BaseOptions(
+ 13 |         connectTimeout: const Duration(seconds: 8),
+ 14 |         receiveTimeout: const Duration(seconds: 15),
+ 15 |         sendTimeout: const Duration(seconds: 8),
+ 16 |       )),
+ 17 |       packageInfo: packageInfo,
+ 18 |     );
+ 19 |     _downloadService = DownloadService(
+ 20 |       dio: Dio(BaseOptions(
+ 21 |         connectTimeout: const Duration(seconds: 10),
+ 22 |         receiveTimeout: const Duration(minutes: 5),
+ 23 |         sendTimeout: const Duration(seconds: 10),
+ 24 |       )),
+ 25 |     );
+ 26 | 
+ 27 |     // In-app update check fires as soon as services are ready, independent
+ 28 |     // of camera permission. A user who has permanently denied the camera
+ 29 |     // (or hits the v0.8.0 permission-classification bug) should still be
+ 30 |     // able to receive an update that fixes the issue. The future is
+ 31 |     // unawaited so it does not block camera/tutorial initialization.
+ 32 |     unawaited(_checkForUpdate());
+ 33 | 
+ 34 |     // Camera permission check must run BEFORE the first-launch tutorial
+ 35 |     // so a permanently denied user hears the "open settings" prompt
+ 36 |     // instead of a tutorial they can't act on. The tutorial only
+ 37 |     // proceeds if the camera is eventually usable.
+ 38 |     final hasPermission = await _ensureCameraPermission();
+ 39 |     if (!hasPermission) {
+ 40 |       _log('启动中止: 无摄像头权限');
+ 41 |       _log('=== 启动完成 (无权限) ===');
+ 42 |       return;
+ 43 |     }
+ 44 | 
+ 45 |     await _checkFirstLaunch();
+ 46 |     await _initCameraWithRetry();
+ 47 | 
+ 48 |     _log('=== 启动完成 ===');
+ 49 |   }
+ 50 | 
+
+============================================================
+第 5 页
+============================================================
+
+  1 |   /// Ensures the camera permission is granted before the rest of the app
+  2 |   /// starts talking to the camera.
+  3 |   ///
+  4 |   /// Returns true if permission is granted (or was just granted), false
+  5 |   /// if the user denied it. When denied, the screen speaks the
+  6 |   /// appropriate prompt and, if the denial is permanent, opens the
+  7 |   /// system settings page.
+  8 |   ///
+  9 |   /// v0.7.1: this is the fix for the silent startup failure where the
+ 10 |   /// app would log "camera not available" repeatedly with no audio
+ 11 |   /// feedback. Visually impaired users would think the app was broken.
+ 12 |   Future<bool> _ensureCameraPermission() async {
+ 13 |     var status = await _permissionService.checkCameraPermission();
+ 14 |     _log('初始权限状态: $status');
+ 15 | 
+ 16 |     if (status == PermissionStatus.granted) {
+ 17 |       return true;
+ 18 |     }
+ 19 | 
+ 20 |     if (status == PermissionStatus.unknown) {
+ 21 |       // The MethodChannel wasn't wired up (e.g. running on a host with
+ 22 |       // no MainActivity). Fall back to asking the system dialog anyway
+ 23 |       // — if it doesn't exist, the request will be a no-op and we'll
+ 24 |       // fail through to the camera retry loop, which already handles
+ 25 |       // CameraException gracefully.
+ 26 |       status = await _permissionService.requestCameraPermission();
+ 27 |       _log('权限请求 (fallback): $status');
+ 28 |     }
+ 29 | 
+ 30 |     if (status == PermissionStatus.granted) {
+ 31 |       return true;
+ 32 |     }
+ 33 | 
+ 34 |     // Permission is denied. Speak the prompt and decide the recovery path.
+ 35 |     if (status == PermissionStatus.permanentlyDenied) {
+ 36 |       _permissionPermanentlyDenied = true;
+ 37 |       await _ttsService.stop();
+ 38 |       await _ttsService.speakCameraPermissionPermanentlyDenied();
+ 39 |       // Try to open settings immediately. If the user grants the
+ 40 |       // permission and returns to the app, [didChangeAppLifecycleState]
+ 41 |       // will retry the camera.
+ 42 |       final opened = await _permissionService.openAppSettings();
+ 43 |       _log('永久拒绝: 跳转设置=$opened');
+ 44 |     } else {
+ 45 |       // First-time or normal denial: ask the system once, then guide.
+ 46 |       await _ttsService.stop();
+ 47 |       await _ttsService.speakCameraPermissionDenied();
+ 48 |       status = await _permissionService.requestCameraPermission();
+ 49 |       _log('权限请求结果: $status');
+ 50 | 
+
+============================================================
+第 6 页
+============================================================
+
+  1 |       if (status == PermissionStatus.granted) {
+  2 |         return true;
+  3 |       }
+  4 |       if (status == PermissionStatus.permanentlyDenied) {
+  5 |         _permissionPermanentlyDenied = true;
+  6 |         await _ttsService.speakCameraPermissionPermanentlyDenied();
+  7 |         await _permissionService.openAppSettings();
+  8 |       }
+  9 |     }
+ 10 | 
+ 11 |     return false;
+ 12 |   }
+ 13 | 
+ 14 |   Future<void> _checkFirstLaunch() async {
+ 15 |     try {
+ 16 |       final prefs = await SharedPreferences.getInstance();
+ 17 |       final hasSeen = prefs.getBool(_tutorialKey) ?? false;
+ 18 |       if (!hasSeen) {
+ 19 |         // First launch: full tutorial
+ 20 |         await Future.delayed(const Duration(milliseconds: 500));
+ 21 |         await _ttsService.speak(
+ 22 |           '欢迎使用慧眼。将手机摄像头对准外卖袋上的打印小票，'
+ 23 |           '应用会自动识别取餐码并播报。单击屏幕重听，三击重新识别，'
+ 24 |           '向上滑动查看历史记录，向下滑动获取操作帮助。',
+ 25 |         );
+ 26 |         await prefs.setBool(_tutorialKey, true);
+ 27 |         _log('教程已播报');
+ 28 |       } else {
+ 29 |         // Subsequent launches: short confirmation
+ 30 |         await _ttsService.speak('欢迎使用慧眼');
+ 31 |       }
+ 32 |     } catch (e) {
+ 33 |       _log('教程错误: $e');
+ 34 |     }
+ 35 |   }
+ 36 | 
+ 37 |   Future<void> _initCameraWithRetry() async {
+ 38 |     for (var attempt = 1; attempt <= 3; attempt++) {
+ 39 |       _log('相机尝试 $attempt/3');
+ 40 |       final ok = await _initCamera();
+ 41 |       if (ok) return;
+ 42 |       if (attempt < 3) {
+ 43 |         await Future.delayed(Duration(seconds: attempt * 2));
+ 44 |       }
+ 45 |     }
+ 46 |     _log('相机不可用');
+ 47 | 
+ 48 |     // v0.7.1: when the camera cannot be initialized, check whether the
+ 49 |     // cause is a missing permission. If so, surface a clear voice
+ 50 |     // prompt. Without this, the app used to log "camera unavailable"
+
+============================================================
+第 7 页
+============================================================
+
+  1 |     // and go silent, leaving the user with no audio feedback at all.
+  2 |     final status = await _permissionService.checkCameraPermission();
+  3 |     if (status == PermissionStatus.denied) {
+  4 |       await _ttsService.speakCameraPermissionDenied();
+  5 |     } else if (status == PermissionStatus.permanentlyDenied) {
+  6 |       _permissionPermanentlyDenied = true;
+  7 |       await _ttsService.speakCameraPermissionPermanentlyDenied();
+  8 |     }
+  9 |   }
+ 10 | 
+ 11 |   Future<bool> _initCamera() async {
+ 12 |     _cameraController?.dispose();
+ 13 |     _cameraController = null;
+ 14 |     if (mounted) setState(() => _isCameraReady = false);
+ 15 | 
+ 16 |     List<CameraDescription>? cameras;
+ 17 |     try {
+ 18 |       cameras = await availableCameras().timeout(const Duration(seconds: 10));
+ 19 |     } catch (e) {
+ 20 |       _log('相机查询失败: $e');
+ 21 |       return false;
+ 22 |     }
+ 23 | 
+ 24 |     if (cameras.isEmpty) {
+ 25 |       _log('无可用相机');
+ 26 |       return false;
+ 27 |     }
+ 28 |     _log('找到 ${cameras.length} 个相机');
+ 29 | 
+ 30 |     final backCamera = cameras.firstWhere(
+ 31 |       (c) => c.lensDirection == CameraLensDirection.back,
+ 32 |       orElse: () => cameras!.first,
+ 33 |     );
+ 34 | 
+ 35 |     _cameraController = CameraController(
+ 36 |       backCamera,
+ 37 |       ResolutionPreset.high,
+ 38 |       enableAudio: false,
+ 39 |     );
+ 40 | 
+ 41 |     try {
+ 42 |       await _cameraController!
+ 43 |           .initialize()
+ 44 |           .timeout(const Duration(seconds: 15));
+ 45 |       _log('相机就绪 (${backCamera.lensDirection})');
+ 46 |       // Wire the torch controller. It is a thin wrapper that knows
+ 47 |       // how to translate our boolean intent into FlashMode calls and
+ 48 |       // how to handle hardware that does not support torch.
+ 49 |       _torchController = TorchController(controller: _cameraController!);
+ 50 |       if (mounted) {
+
+============================================================
+第 8 页
+============================================================
+
+  1 |         setState(() => _isCameraReady = true);
+  2 |         _startScanning();
+  3 |       }
+  4 |       return true;
+  5 |     } catch (e) {
+  6 |       _log('相机初始化失败: $e');
+  7 |       _cameraController?.dispose();
+  8 |       _cameraController = null;
+  9 |       return false;
+ 10 |     }
+ 11 |   }
+ 12 | 
+ 13 |   // ============================================================
+ 14 |   // In-app update flow (v0.8.0)
+ 15 |   // ============================================================
+ 16 | 
+ 17 |   /// Checks for a newer APK once per week on Wi-Fi.
+ 18 |   ///
+ 19 |   /// If an update is found, scanning is paused and the user is prompted
+ 20 |   /// with voice + gestures to confirm the download. Errors are logged and
+ 21 |   /// swallowed so the update check never breaks the main scanning flow.
+ 22 |   Future<void> _checkForUpdate() async {
+ 23 |     try {
+ 24 |       _log('检查更新开始');
+ 25 |       final info = await _updateService.checkForUpdate();
+ 26 |       if (info == null) {
+ 27 |         _log('检查更新: 无更新或条件不满足');
+ 28 |         return;
+ 29 |       }
+ 30 | 
+ 31 |       _log('发现新版本: ${info.versionName}+${info.versionCode}');
+ 32 |       if (!mounted) return;
+ 33 |       setState(() {
+ 34 |         _updatePromptActive = true;
+ 35 |         _pendingUpdate = info;
+ 36 |       });
+ 37 |       _scanTimer?.cancel();
+ 38 | 
+ 39 |       await _ttsService.stop();
+ 40 |       await _ttsService.speakUpdateAvailable();
+ 41 |       await _ttsService.speakConfirmDownload();
+ 42 |     } catch (e) {
+ 43 |       _log('检查更新失败: $e');
+ 44 |       // Auto-update failures must not nag the user every launch.
+ 45 |     }
+ 46 |   }
+ 47 | 
+ 48 |   /// User confirmed the download via swipe-up while the update prompt
+ 49 |   /// is active.
+ 50 |   Future<void> _confirmUpdateDownload() async {
+
+============================================================
+第 9 页
+============================================================
+
+  1 |     final info = _pendingUpdate;
+  2 |     if (info == null) return;
+  3 | 
+  4 |     _log('用户确认下载更新');
+  5 |     setState(() => _updatePromptActive = false);
+  6 |     await _ttsService.stop();
+  7 |     await _ttsService.speakDownloading();
+  8 | 
+  9 |     try {
+ 10 |       final cacheDir = await getTemporaryDirectory();
+ 11 |       final apkPath = '${cacheDir.path}/smart_eye_update.apk';
+ 12 |       await _downloadService.downloadApk(info.downloadUrl, apkPath);
+ 13 | 
+ 14 |       _log('更新包下载完成: $apkPath');
+ 15 |       await _ttsService.stop();
+ 16 |       await _ttsService.speakDownloadComplete();
+ 17 |       await _ttsService.speakInstallPrompt();
+ 18 | 
+ 19 |       await _installDownloadedApk(apkPath);
+ 20 |     } catch (e) {
+ 21 |       _log('下载更新失败: $e');
+ 22 |       await _ttsService.stop();
+ 23 |       await _ttsService.speakDownloadFailed();
+ 24 |       _resumeScanningAfterUpdate();
+ 25 |     }
+ 26 |   }
+ 27 | 
+ 28 |   /// User cancelled the update via swipe-down while the prompt is active.
+ 29 |   Future<void> _cancelUpdateDownload() async {
+ 30 |     _log('用户取消更新');
+ 31 |     setState(() {
+ 32 |       _updatePromptActive = false;
+ 33 |       _pendingUpdate = null;
+ 34 |     });
+ 35 |     await _ttsService.stop();
+ 36 |     await _ttsService.speakUpdateCancelled();
+ 37 |     _resumeScanningAfterUpdate();
+ 38 |   }
+ 39 | 
+ 40 |   /// Resumes scanning after the update flow completes or is cancelled.
+ 41 |   void _resumeScanningAfterUpdate() {
+ 42 |     if (_isCameraReady && mounted) {
+ 43 |       _startScanning();
+ 44 |     }
+ 45 |   }
+ 46 | 
+ 47 |   /// Verifies install permission and launches the system installer.
+ 48 |   Future<void> _installDownloadedApk(String apkPath) async {
+ 49 |     final canInstall = await _installService.canInstall();
+ 50 |     if (!canInstall) {
+
+============================================================
+第 10 页
+============================================================
+
+  1 |       _log('无安装权限，引导用户开启');
+  2 |       await _ttsService.speakInstallPermissionDenied();
+  3 |       await _installService.openInstallSettings();
+  4 |       _resumeScanningAfterUpdate();
+  5 |       return;
+  6 |     }
+  7 | 
+  8 |     final result = await _installService.installApk(apkPath);
+  9 |     if (!result.success) {
+ 10 |       _log('打开安装器失败: ${result.error}');
+ 11 |       await _ttsService.speakDownloadFailed();
+ 12 |       _resumeScanningAfterUpdate();
+ 13 |     }
+ 14 |   }
+ 15 | 
+ 16 |   /// Inspects a captured JPEG for low-light conditions and, if the
+ 17 |   /// scene is too dark, plays a voice prompt and turns the torch on
+ 18 |   /// (v0.7.2).
+ 19 |   ///
+ 20 |   /// The detector runs on a downsampled RGBA buffer — never the full
+ 21 |   /// 720p frame — so the cost is in the low single-digit milliseconds
+ 22 |   /// even on a mid-range Android. The function is safe to call on
+ 23 |   /// every frame: the 8-second cooldown on the voice prompt and the
+ 24 |   /// idempotent [TorchController.setTorch] keep the user experience
+ 25 |   /// from being noisy.
+ 26 |   ///
+ 27 |   /// We deliberately exit early when the torch is already on: a frame
+ 28 |   /// captured under torch light will still look "dark" if the phone
+ 29 |   /// is pointed at a black countertop, and the user has already
+ 30 |   /// received the prompt — we must not repeat it.
+ 31 |   Future<void> _maybeHandleLuminance(XFile jpeg) async {
+ 32 |     if (_torchController == null) return;
+ 33 |     if (_torchController!.isOn) {
+ 34 |       // Already lit. The remaining concern is "too bright", which we
+ 35 |       // do not auto-react to (the user can just turn the torch off).
+ 36 |       return;
+ 37 |     }
+ 38 | 
+ 39 |     final result = await _analyzeJpegLuminance(jpeg);
+ 40 |     if (!result.shouldSuggestTorch) return;
+ 41 | 
+ 42 |     // Cooldown: don't repeat the "lighting is dim" prompt more than
+ 43 |     // once every 8 seconds, even if the user is in a dungeon.
+ 44 |     final now = DateTime.now();
+ 45 |     if (_lastDimPromptTime != null &&
+ 46 |         now.difference(_lastDimPromptTime!) < _dimPromptCooldown) {
+ 47 |       return;
+ 48 |     }
+ 49 |     _lastDimPromptTime = now;
+ 50 | 
+
+============================================================
+第 11 页
+============================================================
+
+  1 |     _isHandlingDimLight = true;
+  2 |     try {
+  3 |       await _ttsService.stop();
+  4 |       await _ttsService.speakLuminanceDim();
+  5 |       final ok = await _torchController!.setTorch(true);
+  6 |       if (ok) {
+  7 |         await _ttsService.speakTorchOn();
+  8 |         _log('亮度 ${result.luminance}/255 → 已自动开手电');
+  9 |       } else {
+ 10 |         // 30-second cooldown so a device that does not support torch
+ 11 |         // does not get the same nag every 8 seconds.
+ 12 |         final last = _lastTorchFailedTime;
+ 13 |         if (last == null ||
+ 14 |             DateTime.now().difference(last) >= _torchFailedCooldown) {
+ 15 |           _lastTorchFailedTime = DateTime.now();
+ 16 |           await _ttsService.speakTorchFailed();
+ 17 |         }
+ 18 |         _log('亮度 ${result.luminance}/255 → 手电开启失败 (硬件不支持?)');
+ 19 |       }
+ 20 |     } catch (e, st) {
+ 21 |       _log('亮度处理异常: $e\n$st');
+ 22 |     } finally {
+ 23 |       _isHandlingDimLight = false;
+ 24 |     }
+ 25 |   }
+ 26 | 
+ 27 |   /// Decodes a JPEG file to RGBA8888 and returns its luminance.
+ 28 |   ///
+ 29 |   /// Returns a "dark" result on any decoding error — that is the safe
+ 30 |   /// default for a prompt: better to nag the user about lighting than
+ 31 |   /// to silently fail.
+ 32 |   Future<LuminanceResult> _analyzeJpegLuminance(XFile jpeg) async {
+ 33 |     try {
+ 34 |       final bytes = await File(jpeg.path).readAsBytes();
+ 35 |       final codec = await ui.instantiateImageCodec(bytes);
+ 36 |       final frame = await codec.getNextFrame();
+ 37 |       final image = frame.image;
+ 38 |       try {
+ 39 |         final rgba = await image.toByteData(
+ 40 |           format: ui.ImageByteFormat.rawRgba,
+ 41 |         );
+ 42 |         if (rgba == null) {
+ 43 |           return const LuminanceResult(
+ 44 |             luminance: 0,
+ 45 |             bucket: LuminanceBucket.dark,
+ 46 |           );
+ 47 |         }
+ 48 |         return LuminanceDetector.analyzeRgba(
+ 49 |           rgbaBytes: rgba.buffer.asUint8List(),
+ 50 |           width: image.width,
+
+============================================================
+第 12 页
+============================================================
+
+  1 |           height: image.height,
+  2 |         );
+  3 |       } finally {
+  4 |         image.dispose();
+  5 |       }
+  6 |     } catch (e) {
+  7 |       _log('JPEG 解码失败: $e');
+  8 |       return const LuminanceResult(
+  9 |         luminance: 0,
+ 10 |         bucket: LuminanceBucket.dark,
+ 11 |       );
+ 12 |     }
+ 13 |   }
+ 14 | 
+ 15 |   void _startScanning() {
+ 16 |     _scanTimer?.cancel();
+ 17 |     _scanTimer =
+ 18 |         Timer.periodic(const Duration(seconds: 2), (_) => _scanFrame());
+ 19 |     _log('扫描已启动 (每2秒)');
+ 20 |   }
+ 21 | 
+ 22 |   Future<void> _scanFrame() async {
+ 23 |     // Skip scanning while announcing to prevent audio overlap.
+ 24 |     if (_isAnnouncing ||
+ 25 |         _isProcessing ||
+ 26 |         _isHandlingDimLight ||
+ 27 |         _cameraController == null ||
+ 28 |         !_cameraController!.value.isInitialized) {
+ 29 |       return;
+ 30 |     }
+ 31 | 
+ 32 |     _isProcessing = true;
+ 33 |     try {
+ 34 |       final image = await _cameraController!.takePicture();
+ 35 | 
+ 36 |       // v0.7.2: low-light detection runs on the Y plane of the captured
+ 37 |       // YUV420 image. The Y plane is grayscale and is the right input
+ 38 |       // for a "can the user see this" check. If the frame is too dark,
+ 39 |       // we prompt the user and turn the torch on *before* OCR — this
+ 40 |       // way subsequent frames will be lit and OCR will succeed.
+ 41 |       await _maybeHandleLuminance(image);
+ 42 | 
+ 43 |       // Read actual image dimensions for accurate position calculation.
+ 44 |       // The captured image may be in sensor-native (landscape) orientation
+ 45 |       // or already rotated to portrait, depending on the device.
+ 46 |       int imgW = 720, imgH = 1280;
+ 47 |       try {
+ 48 |         final bytes = await File(image.path).readAsBytes();
+ 49 |         final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+ 50 |         final descriptor = await ui.ImageDescriptor.encoded(buffer);
+
+============================================================
+第 13 页
+============================================================
+
+  1 |         imgW = descriptor.width;
+  2 |         imgH = descriptor.height;
+  3 |         buffer.dispose();
+  4 |         descriptor.dispose();
+  5 |       } catch (_) {
+  6 |         // Fallback to previewSize if descriptor fails
+  7 |       }
+  8 | 
+  9 |       // Recognize both the original and 180°-rotated image, then merge.
+ 10 |       // Visually impaired users cannot rotate receipts, so the app must
+ 11 |       // handle both orientations automatically.
+ 12 |       final inputImage = InputImage.fromFilePath(image.path);
+ 13 |       final recognizedText = await _textRecognizer.processImage(inputImage);
+ 14 | 
+ 15 |       // Recognize 180°-rotated copy. Block coordinates in the result are in
+ 16 |       // the rotated image space; we'll transform them back later.
+ 17 |       final rotatedText = await _recognizeRotated(image.path, 180);
+ 18 | 
+ 19 |       // Clean up temp file
+ 20 |       try {
+ 21 |         final file = File(image.path);
+ 22 |         if (await file.exists()) await file.delete();
+ 23 |       } catch (_) {}
+ 24 | 
+ 25 |       // Merge both recognition results into a single text + block list.
+ 26 |       // Block coordinates from rotated text need to be transformed back to
+ 27 |       // the original image space.
+ 28 |       final allBlocks = <_OrientedBlock>[
+ 29 |         ...recognizedText.blocks.map((b) => _OrientedBlock(b, false)),
+ 30 |         ...rotatedText.blocks.map((b) => _OrientedBlock(b, true)),
+ 31 |       ];
+ 32 |       final combinedText = allBlocks.map((b) => b.block.text).join('\n');
+ 33 |       final hasText = combinedText.trim().isNotEmpty;
+ 34 | 
+ 35 |       // Always log OCR result every 5 seconds
+ 36 |       if (_ocrLogTimer == null ||
+ 37 |           DateTime.now().difference(_ocrLogTimer!) >
+ 38 |               const Duration(seconds: 5)) {
+ 39 |         final preview = combinedText.length > 50
+ 40 |             ? combinedText.substring(0, 50)
+ 41 |             : combinedText;
+ 42 |         _log('OCR: ${hasText ? '${combinedText.length}字 $preview' : '无文字'}');
+ 43 |         _ocrLogTimer = DateTime.now();
+ 44 |       }
+ 45 | 
+ 46 |       var codes = _ocrService.extractMealCodes(combinedText);
+ 47 |       // Fallback: some real-world OCR outputs split the `#` and digits or
+ 48 |       // use a full-width `#`. Fuzzy extraction requires a nearby platform
+ 49 |       // keyword to keep false positives low.
+ 50 |       if (codes.isEmpty) {
+
+============================================================
+第 14 页
+============================================================
+
+  1 |         codes = _ocrService.extractMealCodesFuzzy(combinedText);
+  2 |         if (codes.isNotEmpty) {
+  3 |           _log('OCR 模糊匹配到取餐码: $codes');
+  4 |         }
+  5 |       }
+  6 | 
+  7 |       if (codes.isEmpty) {
+  8 |         // No codes found but text detected → distinguish "found the
+  9 |         // delivery platform but no code yet" from "just random text".
+ 10 |         if (hasText) {
+ 11 |           if (_ocrService.hasPlatformKeyword(combinedText)) {
+ 12 |             _log('platform keyword detected → 发现外卖提示');
+ 13 |             await _playDetectedTakeoutPrompt();
+ 14 |           } else {
+ 15 |             _log('no platform keyword → 识别中提示');
+ 16 |             await _playScanningPrompt();
+ 17 |           }
+ 18 |         } else {
+ 19 |           // No text at all → receipt likely out of frame.
+ 20 |           // Guide the user back based on last known position.
+ 21 |           await _playDirectionGuidance();
+ 22 |         }
+ 23 |       } else {
+ 24 |         // Single or multi-code: find each code's containing block for
+ 25 |         // accurate per-receipt platform detection.
+ 26 |         final results = <ScanResult>[];
+ 27 | 
+ 28 |         // Use the full image frame as position reference.
+ 29 |         // ML Kit's InputImage.fromFilePath reads EXIF rotation metadata and
+ 30 |         // internally rotates the image to upright (portrait) orientation.
+ 31 |         // Therefore bounding boxes are ALREADY in upright coordinate space —
+ 32 |         // no manual transformation needed. We just need the upright dimensions.
+ 33 |         final isLandscapeRaw = imgW > imgH;
+ 34 |         // Upright (portrait) dimensions after EXIF rotation is applied.
+ 35 |         final uprightW = isLandscapeRaw ? imgH.toDouble() : imgW.toDouble();
+ 36 |         final uprightH = isLandscapeRaw ? imgW.toDouble() : imgH.toDouble();
+ 37 |         final imageBounds = Rect.fromLTWH(0, 0, uprightW, uprightH);
+ 38 | 
+ 39 |         // For each code, find its block, position, and platform.
+ 40 |         for (final code in codes) {
+ 41 |           // Find the block containing this code.
+ 42 |           // Use multi-pass matching to avoid false matches:
+ 43 |           //   1. Exact "#18" match (most reliable)
+ 44 |           //   2. Block contains "#" AND the digits (e.g. "# 18")
+ 45 |           //   3. Fallback: digits only (least reliable, may match dates/prices)
+ 46 |           String? blockText;
+ 47 |           Rect? codeBox;
+ 48 | 
+ 49 |           // Pass 1: exact match (e.g. block contains "#18")
+ 50 |           for (final ob in allBlocks) {
+
+============================================================
+第 15 页
+============================================================
+
+  1 |             final normalizedBlock =
+  2 |                 OcrService.normalizeHashSymbols(ob.block.text);
+  3 |             if (normalizedBlock.contains(code)) {
+  4 |               codeBox = ob.transformedBox(uprightW, uprightH);
+  5 |               blockText = ob.block.text;
+  6 |               break;
+  7 |             }
+  8 |           }
+  9 | 
+ 10 |           // Pass 2: block has "#" and the digits separately
+ 11 |           if (codeBox == null) {
+ 12 |             final digits = code.replaceFirst('#', '');
+ 13 |             for (final ob in allBlocks) {
+ 14 |               final normalizedBlock =
+ 15 |                   OcrService.normalizeHashSymbols(ob.block.text);
+ 16 |               if (normalizedBlock.contains('#') &&
+ 17 |                   normalizedBlock.contains(digits)) {
+ 18 |                 codeBox = ob.transformedBox(uprightW, uprightH);
+ 19 |                 blockText = ob.block.text;
+ 20 |                 break;
+ 21 |               }
+ 22 |             }
+ 23 |           }
+ 24 | 
+ 25 |           // Pass 3: fallback — digits only
+ 26 |           if (codeBox == null) {
+ 27 |             final digits = code.replaceFirst('#', '');
+ 28 |             for (final ob in allBlocks) {
+ 29 |               final normalizedBlock =
+ 30 |                   OcrService.normalizeHashSymbols(ob.block.text);
+ 31 |               if (normalizedBlock.contains(digits)) {
+ 32 |                 codeBox = ob.transformedBox(uprightW, uprightH);
+ 33 |                 blockText = ob.block.text;
+ 34 |                 break;
+ 35 |               }
+ 36 |             }
+ 37 |           }
+ 38 | 
+ 39 |           if (codeBox == null || blockText == null) continue;
+ 40 | 
+ 41 |           // Bounding box is already in upright (portrait) coordinate space.
+ 42 |           // Use it directly — no transformation.
+ 43 |           final center = Offset(
+ 44 |             (codeBox.left + codeBox.right) / 2,
+ 45 |             (codeBox.top + codeBox.bottom) / 2,
+ 46 |           );
+ 47 |           final posLabel = computePositionLabel(center, imageBounds);
+ 48 |           _lastCodePosition = posLabel; // remember for direction guidance
+ 49 |           _log(
+ 50 |               '位置调试: code=$code center=(${center.dx.toInt()},${center.dy.toInt()}) '
+
+============================================================
+第 16 页
+============================================================
+
+  1 |               'upright=${uprightW.toInt()}x${uprightH.toInt()} '
+  2 |               'rawImg=${imgW}x$imgH posLabel=$posLabel');
+  3 |           // Detect platform using the code's own block text first, then fall
+  4 |           // back to the full frame context if the platform name ended up in a
+  5 |           // different OCR block. Context fallback uses a larger proximity
+  6 |           // window to avoid cross-receipt misidentification.
+  7 |           final platform = _ocrService.detectPlatform(
+  8 |             blockText,
+  9 |             nearCode: code,
+ 10 |             contextText: combinedText,
+ 11 |           );
+ 12 | 
+ 13 |           results.add(ScanResult(
+ 14 |             code: code,
+ 15 |             platform: platform,
+ 16 |             positionLabel: posLabel,
+ 17 |             center: center,
+ 18 |           ));
+ 19 |         }
+ 20 | 
+ 21 |         // --- Cross-frame code merging ---
+ 22 |         // When a receipt is upside down, OCR may only detect one code per
+ 23 |         // frame. We cache detected codes for [_codeCacheWindow] and merge
+ 24 |         // them with the current frame so multi-code scenarios still work.
+ 25 |         final now = DateTime.now();
+ 26 | 
+ 27 |         // Purge expired entries.
+ 28 |         _codeCache.removeWhere((key, cached) =>
+ 29 |             now.difference(cached.timestamp) > _codeCacheWindow);
+ 30 | 
+ 31 |         // Add/update current frame's codes into the cache.
+ 32 |         for (final r in results) {
+ 33 |           _codeCache[r.code] = _CachedCode(
+ 34 |             code: r.code,
+ 35 |             platform: r.platform,
+ 36 |             positionLabel: r.positionLabel,
+ 37 |             center: r.center,
+ 38 |             timestamp: now,
+ 39 |           );
+ 40 |         }
+ 41 | 
+ 42 |         // Build merged results from cache (current frame + recent frames),
+ 43 |         // converted to ScanResult for downstream compatibility.
+ 44 |         final mergedResults = _codeCache.values
+ 45 |             .map((c) => ScanResult(
+ 46 |                   code: c.code,
+ 47 |                   platform: c.platform,
+ 48 |                   positionLabel: c.positionLabel,
+ 49 |                   center: c.center,
+ 50 |                 ))
+
+============================================================
+第 17 页
+============================================================
+
+  1 |             .toList()
+  2 |           ..sort((a, b) {
+  3 |             final yDiff = a.center.dy.compareTo(b.center.dy);
+  4 |             if (yDiff.abs() > 20) return yDiff;
+  5 |             return a.center.dx.compareTo(b.center.dx);
+  6 |           });
+  7 | 
+  8 |         // Use merged results if there are more codes than the current frame.
+  9 |         final effectiveResults =
+ 10 |             mergedResults.length > results.length ? mergedResults : results;
+ 11 | 
+ 12 |         if (effectiveResults.isEmpty) {
+ 13 |           await _playScanningPrompt();
+ 14 |         } else {
+ 15 |           // effectiveResults is already sorted (from cache merge or above).
+ 16 |           // Re-sort to be safe.
+ 17 |           effectiveResults.sort((a, b) {
+ 18 |             final yDiff = a.center.dy.compareTo(b.center.dy);
+ 19 |             if (yDiff.abs() > 20) return yDiff;
+ 20 |             return a.center.dx.compareTo(b.center.dx);
+ 21 |           });
+ 22 | 
+ 23 |           if (effectiveResults.length == 1) {
+ 24 |             // Single code flow.
+ 25 |             final r = effectiveResults.first;
+ 26 |             final platformLabel = r.platform ?? '未知';
+ 27 |             _log('codes=$codes platform=$platformLabel');
+ 28 |             final confirmed = _ocrService.processFrame(r.code);
+ 29 |             _log(
+ 30 |                 'confirmed=$confirmed cool=${_ocrService.isInCooldown(r.code)}');
+ 31 |             if (confirmed != null) {
+ 32 |               _log('识别到取餐码: ${r.code} ($platformLabel) ${r.positionLabel}');
+ 33 |               _lastAnnouncedCode = confirmed;
+ 34 |               _lastDetectedPlatform = r.platform;
+ 35 |               _lastCodePosition = r.positionLabel;
+ 36 |               await _historyService.add(confirmed, platform: r.platform);
+ 37 |               _isAnnouncing = true;
+ 38 |               await _ttsService.stop();
+ 39 |               await _ttsService.speakSingleCodeWithPosition(
+ 40 |                   confirmed, r.platform, r.positionLabel);
+ 41 |               _isAnnouncing = false;
+ 42 |             }
+ 43 |           } else {
+ 44 |             // Multi-code flow.
+ 45 |             _log(
+ 46 |                 'codes=$codes effective=${effectiveResults.map((r) => r.code).toList()} → 多码检测');
+ 47 |             // Check if ANY code is new (not in cooldown).
+ 48 |             final hasNewCode =
+ 49 |                 effectiveResults.any((r) => !_ocrService.isInCooldown(r.code));
+ 50 |             if (hasNewCode) {
+
+============================================================
+第 18 页
+============================================================
+
+  1 |               for (final r in effectiveResults) {
+  2 |                 _ocrService.processFrame(r.code);
+  3 |               }
+  4 | 
+  5 |               final summary = effectiveResults
+  6 |                   .map((r) =>
+  7 |                       '${r.code}(${r.platform ?? '?'})${r.positionLabel}')
+  8 |                   .join(' ');
+  9 |               _log('多码播报: $summary');
+ 10 | 
+ 11 |               _lastAnnouncedCode = effectiveResults.first.code;
+ 12 |               _lastDetectedPlatform = effectiveResults.first.platform;
+ 13 |               _lastCodePosition = effectiveResults.first.positionLabel;
+ 14 |               for (final r in effectiveResults) {
+ 15 |                 await _historyService.add(r.code, platform: r.platform);
+ 16 |               }
+ 17 | 
+ 18 |               _isAnnouncing = true;
+ 19 |               await _ttsService.stop();
+ 20 |               await _ttsService.speakMultiCode(effectiveResults);
+ 21 |               _isAnnouncing = false;
+ 22 |             } else {
+ 23 |               _log('多码: 所有码均在冷却中，跳过');
+ 24 |             }
+ 25 |           }
+ 26 |         }
+ 27 |       }
+ 28 |     } catch (e) {
+ 29 |       _log('扫描错误: $e');
+ 30 |     } finally {
+ 31 |       _isProcessing = false;
+ 32 |     }
+ 33 |   }
+ 34 | 
+ 35 |   /// Plays the "识别中，手机请稳一些" prompt with cooldown.
+ 36 |   Future<void> _playScanningPrompt() async {
+ 37 |     final now = DateTime.now();
+ 38 |     if (_lastBeepTime != null &&
+ 39 |         now.difference(_lastBeepTime!) < const Duration(seconds: 8)) {
+ 40 |       return;
+ 41 |     }
+ 42 |     _lastBeepTime = now;
+ 43 |     await _playDistanceFeedback(slow: true);
+ 44 |     await _ttsService.speakScanning();
+ 45 |   }
+ 46 | 
+ 47 |   /// Plays the "发现外卖，识别中，手机请稳一些" prompt with cooldown.
+ 48 |   ///
+ 49 |   /// Triggered when a delivery platform keyword (e.g. 美团外卖, 饿了么) is
+ 50 |   /// detected in the frame but no pickup code has been recognized yet.
+
+============================================================
+第 19 页
+============================================================
+
+  1 |   /// Has a 5-second cooldown to prevent the prompt from playing every
+  2 |   /// scan cycle.
+  3 |   Future<void> _playDetectedTakeoutPrompt() async {
+  4 |     if (_feedbackBusy || _isAnnouncing) return;
+  5 | 
+  6 |     final now = DateTime.now();
+  7 |     if (_lastTakeoutPromptTime != null &&
+  8 |         now.difference(_lastTakeoutPromptTime!) < const Duration(seconds: 5)) {
+  9 |       return;
+ 10 |     }
+ 11 |     _lastTakeoutPromptTime = now;
+ 12 | 
+ 13 |     _feedbackBusy = true;
+ 14 |     await _ttsService.stop();
+ 15 |     await _ttsService.speakDetectedTakeout();
+ 16 |     _feedbackBusy = false;
+ 17 |   }
+ 18 | 
+ 19 |   /// Plays direction guidance when the receipt is out of frame.
+ 20 |   ///
+ 21 |   /// Uses the last known position of the code to tell the user which
+ 22 |   /// direction to move the phone. Has a 5-second cooldown to avoid spam.
+ 23 |   Future<void> _playDirectionGuidance() async {
+ 24 |     if (_feedbackBusy || _isAnnouncing) return;
+ 25 | 
+ 26 |     final now = DateTime.now();
+ 27 |     if (_lastGuidanceTime != null &&
+ 28 |         now.difference(_lastGuidanceTime!) < const Duration(seconds: 5)) {
+ 29 |       return;
+ 30 |     }
+ 31 |     _lastGuidanceTime = now;
+ 32 | 
+ 33 |     _feedbackBusy = true;
+ 34 |     await _ttsService.stop();
+ 35 | 
+ 36 |     final clips = <String>['assets/audio/not_in_frame.mp3'];
+ 37 | 
+ 38 |     // Build direction clips based on last known position.
+ 39 |     final pos = _lastCodePosition;
+ 40 |     if (pos != null) {
+ 41 |       clips.add('assets/audio/move.mp3');
+ 42 |       // Map position label to direction audio.
+ 43 |       final dirClip = _positionToDirectionClip(pos);
+ 44 |       if (dirClip != null) clips.add(dirClip);
+ 45 |       clips.add('assets/audio/pian.mp3');
+ 46 |     }
+ 47 | 
+ 48 |     _log('方向引导: 小票不在画面中, 上次位置=$pos');
+ 49 |     await _ttsService.speakAudioClips(clips);
+ 50 |     _feedbackBusy = false;
+
+============================================================
+第 20 页
+============================================================
+
+  1 |   }
+  2 | 
+  3 |   /// Maps a position label (e.g. "左下") to a direction audio clip.
+  4 |   String? _positionToDirectionClip(String pos) {
+  5 |     switch (pos) {
+  6 |       case '左上':
+  7 |         return 'assets/audio/up.mp3'; // simplified: guide to upper area
+  8 |       case '右上':
+  9 |         return 'assets/audio/up.mp3';
+ 10 |       case '左下':
+ 11 |         return 'assets/audio/down.mp3';
+ 12 |       case '右下':
+ 13 |         return 'assets/audio/down.mp3';
+ 14 |       case '左侧':
+ 15 |         return 'assets/audio/left.mp3';
+ 16 |       case '右侧':
+ 17 |         return 'assets/audio/right.mp3';
+ 18 |       case '上方':
+ 19 |         return 'assets/audio/up.mp3';
+ 20 |       case '下方':
+ 21 |         return 'assets/audio/down.mp3';
+ 22 |       case '中间':
+ 23 |         return null; // no specific direction needed
+ 24 |       default:
+ 25 |         return null;
+ 26 |     }
+ 27 |   }
+ 28 | 
+ 29 |   Future<void> _playDistanceFeedback({required bool slow}) async {
+ 30 |     if (_feedbackBusy) return;
+ 31 |     // Cooldown: at most one beep per 8 seconds to avoid audio spam
+ 32 |     // when the phone is unsteady.
+ 33 |     final now = DateTime.now();
+ 34 |     if (_lastBeepTime != null &&
+ 35 |         now.difference(_lastBeepTime!) < const Duration(seconds: 8)) {
+ 36 |       return;
+ 37 |     }
+ 38 |     _feedbackBusy = true;
+ 39 |     _lastBeepTime = now;
+ 40 | 
+ 41 |     // Stop any ongoing playback before playing new feedback
+ 42 |     await _ttsService.stop();
+ 43 | 
+ 44 |     final code = slow ? 'beep_slow' : 'beep_fast';
+ 45 |     await _ttsService.speak(code);
+ 46 |     _feedbackBusy = false;
+ 47 |   }
+ 48 | 
+ 49 |   /// Recognizes text in a rotated copy of the given image.
+ 50 |   ///
+
+============================================================
+第 21 页
+============================================================
+
+  1 |   /// Used for 180°-rotated receipts that ML Kit can't read normally. Returns
+  2 |   /// an empty [RecognizedText] if the rotation fails for any reason (e.g. out
+  3 |   /// of memory, unsupported file format).
+  4 |   Future<RecognizedText> _recognizeRotated(
+  5 |       String imagePath, int rotationDeg) async {
+  6 |     try {
+  7 |       final bytes = await File(imagePath).readAsBytes();
+  8 |       final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+  9 |       final descriptor = await ui.ImageDescriptor.encoded(buffer);
+ 10 |       final codec = await descriptor.instantiateCodec();
+ 11 |       final frame = await codec.getNextFrame();
+ 12 |       final src = frame.image;
+ 13 |       final srcW = src.width;
+ 14 |       final srcH = src.height;
+ 15 |       buffer.dispose();
+ 16 |       descriptor.dispose();
+ 17 |       codec.dispose();
+ 18 | 
+ 19 |       // Rotate 180°: dstW == srcW, dstH == srcH
+ 20 |       final recorder = ui.PictureRecorder();
+ 21 |       final canvas = ui.Canvas(recorder);
+ 22 |       canvas.translate(srcW.toDouble(), srcH.toDouble());
+ 23 |       canvas.rotate(rotationDeg * 3.14159265358979 / 180);
+ 24 |       canvas.drawImage(src, Offset.zero, ui.Paint());
+ 25 |       final picture = recorder.endRecording();
+ 26 |       final rotated = await picture.toImage(srcW, srcH);
+ 27 |       picture.dispose();
+ 28 |       src.dispose();
+ 29 | 
+ 30 |       // Encode to PNG and run ML Kit on the bytes.
+ 31 |       final byteData = await rotated.toByteData(format: ui.ImageByteFormat.png);
+ 32 |       rotated.dispose();
+ 33 |       if (byteData == null) {
+ 34 |         return RecognizedText(text: '', blocks: []);
+ 35 |       }
+ 36 | 
+ 37 |       // Write to a temp file so InputImage.fromFilePath can read it (some
+ 38 |       // Android versions don't support raw byte input images for ML Kit).
+ 39 |       final tmp = File('$imagePath.rotated.png');
+ 40 |       await tmp.writeAsBytes(byteData.buffer.asUint8List());
+ 41 |       final result =
+ 42 |           await _textRecognizer.processImage(InputImage.fromFilePath(tmp.path));
+ 43 |       try {
+ 44 |         await tmp.delete();
+ 45 |       } catch (_) {}
+ 46 |       return result;
+ 47 |     } catch (e) {
+ 48 |       _log('旋转识别失败: $e');
+ 49 |       return RecognizedText(text: '', blocks: []);
+ 50 |     }
+
+============================================================
+第 22 页
+============================================================
+
+  1 |   }
+  2 | 
+  3 |   Future<void> _replayLast() async {
+  4 |     _log('手势: 单击重听');
+  5 |     await _ttsService.stop();
+  6 |     if (_lastAnnouncedCode != null) {
+  7 |       await _ttsService.speakSingleCodeWithPosition(
+  8 |           _lastAnnouncedCode!, _lastDetectedPlatform, _lastCodePosition);
+  9 |     } else {
+ 10 |       await _ttsService.speak('没有识别到取餐码');
+ 11 |     }
+ 12 |   }
+ 13 | 
+ 14 |   Future<void> _restartScan() async {
+ 15 |     _log('手势: 三击重新识别');
+ 16 |     await _ttsService.stop();
+ 17 |     _ocrService.reset();
+ 18 |     _lastAnnouncedCode = null;
+ 19 |     _lastDetectedPlatform = null;
+ 20 |     _lastCodePosition = null;
+ 21 |     _isAnnouncing = false;
+ 22 |     await _ttsService.speak('没有识别到取餐码，请重新对准小票');
+ 23 |   }
+ 24 | 
+ 25 |   Future<void> _announceHistory() async {
+ 26 |     _log('手势: 上滑历史');
+ 27 |     await _ttsService.stop();
+ 28 |     try {
+ 29 |       final records = await _historyService.getRecent();
+ 30 |       if (records.isEmpty) {
+ 31 |         await _ttsService.speakNoHistory();
+ 32 |         return;
+ 33 |       }
+ 34 |       await _ttsService.speakHistory(records);
+ 35 |     } catch (e) {
+ 36 |       _log('历史错误: $e');
+ 37 |     }
+ 38 |   }
+ 39 | 
+ 40 |   Future<void> _announceHelp() async {
+ 41 |     _log('手势: 下滑帮助');
+ 42 |     await _ttsService.stop();
+ 43 |     await _ttsService.speak('操作帮助');
+ 44 |   }
+ 45 | 
+ 46 |   Future<void> _exportLogs() async {
+ 47 |     _log('手势: 双击导出日志');
+ 48 |     // v0.7.1: if the camera never came up because permission was
+ 49 |     // permanently denied, a double-tap (which would normally export
+ 50 |     // logs) should re-surface the permission prompt instead. Without
+
+============================================================
+第 23 页
+============================================================
+
+  1 |     // this, the user has no audio feedback that the app is in a
+  2 |     // permission-denied state — they would just hear "日志导出成功"
+  3 |     // even though the camera is dead.
+  4 |     if (_permissionPermanentlyDenied) {
+  5 |       await _ttsService.speakCameraPermissionPermanentlyDenied();
+  6 |       return;
+  7 |     }
+  8 |     final path = await _logger.exportToDownloads();
+  9 |     if (path != null) {
+ 10 |       await _ttsService.speak('日志已导出到下载目录');
+ 11 |       _log('日志导出: $path');
+ 12 |     } else {
+ 13 |       await _ttsService.speak('日志导出失败');
+ 14 |       _log('日志导出失败');
+ 15 |     }
+ 16 |   }
+ 17 | 
+ 18 |   int _tapCount = 0;
+ 19 |   Timer? _tapTimer;
+ 20 | 
+ 21 |   void _handleTap() {
+ 22 |     // Ignore taps while an update prompt is active; the prompt is driven
+ 23 |     // by swipe gestures to reduce accidental confirmation/cancellation.
+ 24 |     if (_updatePromptActive) return;
+ 25 | 
+ 26 |     _tapCount++;
+ 27 |     _tapTimer?.cancel();
+ 28 |     _tapTimer = Timer(const Duration(milliseconds: 600), () {
+ 29 |       if (_tapCount == 1) {
+ 30 |         _replayLast();
+ 31 |       } else if (_tapCount == 2) {
+ 32 |         _exportLogs();
+ 33 |       } else if (_tapCount >= 3) {
+ 34 |         _restartScan();
+ 35 |       }
+ 36 |       _tapCount = 0;
+ 37 |     });
+ 38 |   }
+ 39 | 
+ 40 |   void _handleVerticalDrag(DragUpdateDetails details) {
+ 41 |     // Ignore small accidental movements.
+ 42 |   }
+ 43 | 
+ 44 |   void _handleVerticalDragEnd(DragEndDetails details) {
+ 45 |     final velocity = details.primaryVelocity;
+ 46 |     if (velocity == null) return;
+ 47 | 
+ 48 |     // During an active update prompt, swipe up confirms the download and
+ 49 |     // swipe down cancels it. This avoids conflicting with the normal
+ 50 |     // history/help gestures while the user is making a yes/no decision.
+
+============================================================
+第 24 页
+============================================================
+
+  1 |     if (_updatePromptActive) {
+  2 |       if (velocity < -800) {
+  3 |         unawaited(_confirmUpdateDownload());
+  4 |       } else if (velocity > 800) {
+  5 |         unawaited(_cancelUpdateDownload());
+  6 |       }
+  7 |       return;
+  8 |     }
+  9 | 
+ 10 |     if (velocity < -800) {
+ 11 |       _announceHistory();
+ 12 |     } else if (velocity > 800) {
+ 13 |       _announceHelp();
+ 14 |     }
+ 15 |   }
+ 16 | 
+ 17 |   @override
+ 18 |   void didChangeAppLifecycleState(AppLifecycleState state) {
+ 19 |     if (state == AppLifecycleState.inactive ||
+ 20 |         state == AppLifecycleState.paused) {
+ 21 |       _scanTimer?.cancel();
+ 22 |       // v0.7.2: turn the torch off when the app goes background. Leaving
+ 23 |       // it on would drain battery and could surprise the user the next
+ 24 |       // time they open the camera app. Best-effort — the camera is
+ 25 |       // about to be disposed anyway.
+ 26 |       if (_torchController?.isOn ?? false) {
+ 27 |         // We deliberately do not await this: the activity is already
+ 28 |         // tearing down, and the camera plugin will release the flash
+ 29 |         // when the controller is disposed. We just want the state
+ 30 |         // to be coherent for the next launch.
+ 31 |         unawaited(_torchController!.setTorch(false));
+ 32 |       }
+ 33 |       _cameraController?.dispose();
+ 34 |       _cameraController = null;
+ 35 |       _torchController = null;
+ 36 |       if (mounted) setState(() => _isCameraReady = false);
+ 37 |     } else if (state == AppLifecycleState.resumed) {
+ 38 |       _log('应用恢复前台');
+ 39 |       // v0.7.1: if the user came back from the system settings page
+ 40 |       // (where they just granted camera permission), re-check the
+ 41 |       // permission and reinitialize the camera. The previous code
+ 42 |       // unconditionally called _initCameraWithRetry, which would
+ 43 |       // re-enter the failure loop if the permission was still denied.
+ 44 |       _onResumedFromBackground();
+ 45 |     }
+ 46 |   }
+ 47 | 
+ 48 |   /// Handler for the app returning to the foreground.
+ 49 |   ///
+ 50 |   /// The two cases we care about are:
+
+============================================================
+第 25 页
+============================================================
+
+  1 |   /// 1. The user just granted camera permission in the system settings
+  2 |   ///    page (after a permanent denial). In this case we want to clear
+  3 |   ///    the [_permissionPermanentlyDenied] flag and retry the camera.
+  4 |   /// 2. The user briefly switched apps. The camera should be re-opened
+  5 |   ///    exactly as before.
+  6 |   Future<void> _onResumedFromBackground() async {
+  7 |     if (_permissionPermanentlyDenied) {
+  8 |       final status = await _permissionService.checkCameraPermission();
+  9 |       _log('恢复后权限状态: $status');
+ 10 |       if (status == PermissionStatus.granted) {
+ 11 |         _permissionPermanentlyDenied = false;
+ 12 |         _log('权限恢复，重新初始化相机');
+ 13 |         await _initCameraWithRetry();
+ 14 |       } else {
+ 15 |         // Still denied. Re-surface the prompt so the user knows what
+ 16 |         // to do. We avoid opening settings again automatically, because
+ 17 |         // a quick app switch should not bounce the user out of their
+ 18 |         // current task.
+ 19 |         await _ttsService.stop();
+ 20 |         await _ttsService.speakCameraPermissionPermanentlyDenied();
+ 21 |       }
+ 22 |     } else {
+ 23 |       await _initCameraWithRetry();
+ 24 |     }
+ 25 |   }
+ 26 | 
+ 27 |   @override
+ 28 |   void dispose() {
+ 29 |     WidgetsBinding.instance.removeObserver(this);
+ 30 |     _scanTimer?.cancel();
+ 31 |     _tapTimer?.cancel();
+ 32 |     _cameraController?.dispose();
+ 33 |     _cameraController = null;
+ 34 |     _textRecognizer.close();
+ 35 |     _logger.write('INFO', '应用关闭');
+ 36 |     super.dispose();
+ 37 |   }
+ 38 | 
+ 39 |   @override
+ 40 |   Widget build(BuildContext context) {
+ 41 |     return Semantics(
+ 42 |       label: '慧眼主界面，全屏触摸区域。单击重听，双击导出日志，三击重新识别，向上滑动播报历史记录，向下滑动播报操作帮助。',
+ 43 |       child: GestureDetector(
+ 44 |         onTap: _handleTap,
+ 45 |         onVerticalDragUpdate: _handleVerticalDrag,
+ 46 |         onVerticalDragEnd: _handleVerticalDragEnd,
+ 47 |         behavior: HitTestBehavior.opaque,
+ 48 |         child: Scaffold(
+ 49 |           backgroundColor: Colors.black,
+ 50 |           body: Stack(
+
+============================================================
+第 26 页
+============================================================
+
+  1 |             fit: StackFit.expand,
+  2 |             children: [
+  3 |               // Camera preview.
+  4 |               if (_isCameraReady && _cameraController != null)
+  5 |                 SizedBox.expand(
+  6 |                   child: FittedBox(
+  7 |                     fit: BoxFit.cover,
+  8 |                     child: SizedBox(
+  9 |                       width:
+ 10 |                           _cameraController!.value.previewSize?.height ?? 720,
+ 11 |                       height:
+ 12 |                           _cameraController!.value.previewSize?.width ?? 1280,
+ 13 |                       child: CameraPreview(_cameraController!),
+ 14 |                     ),
+ 15 |                   ),
+ 16 |                 ),
+ 17 | 
+ 18 |               // Log overlay.
+ 19 |               Positioned(
+ 20 |                 top: 0,
+ 21 |                 left: 0,
+ 22 |                 right: 0,
+ 23 |                 child: IgnorePointer(
+ 24 |                   child: ValueListenableBuilder<List<String>>(
+ 25 |                     valueListenable: _logger.screenBufferNotifier,
+ 26 |                     builder: (context, buffer, _) {
+ 27 |                       return Container(
+ 28 |                         color: Colors.black.withOpacity(0.8),
+ 29 |                         padding: const EdgeInsets.symmetric(
+ 30 |                             horizontal: 12, vertical: 8),
+ 31 |                         child: Column(
+ 32 |                           crossAxisAlignment: CrossAxisAlignment.start,
+ 33 |                           mainAxisSize: MainAxisSize.min,
+ 34 |                           children: buffer
+ 35 |                               .map((l) => Text(
+ 36 |                                     l,
+ 37 |                                     style: const TextStyle(
+ 38 |                                         color: Colors.greenAccent,
+ 39 |                                         fontSize: 11),
+ 40 |                                   ))
+ 41 |                               .toList(),
+ 42 |                         ),
+ 43 |                       );
+ 44 |                     },
+ 45 |                   ),
+ 46 |                 ),
+ 47 |               ),
+ 48 |             ],
+ 49 |           ),
+ 50 |         ),
+
+============================================================
+第 27 页
+============================================================
+
+  1 |       ),
+  2 |     );
+  3 |   }
+  4 | }
+  5 | 
+  6 | /// A code cached from a recent frame, used for cross-frame merging.
+  7 | class _CachedCode {
+  8 |   final String code;
+  9 |   final String? platform;
+ 10 |   final String positionLabel;
+ 11 |   final Offset center;
+ 12 |   final DateTime timestamp;
+ 13 | 
+ 14 |   _CachedCode({
+ 15 |     required this.code,
+ 16 |     required this.platform,
+ 17 |     required this.positionLabel,
+ 18 |     required this.center,
+ 19 |     required this.timestamp,
+ 20 |   });
+ 21 | }
+ 22 | 
+ 23 | /// A recognized text block tagged with whether it came from a rotated image.
+ 24 | ///
+ 25 | /// For rotated images, bounding box coordinates are in the rotated coordinate
+ 26 | /// space. [transformedBox] maps them back to the original (upright) space so
+ 27 | /// downstream position logic works uniformly.
+ 28 | class _OrientedBlock {
+ 29 |   final TextBlock block;
+ 30 |   final bool rotated;
+ 31 | 
+ 32 |   _OrientedBlock(this.block, this.rotated);
+ 33 | 
+ 34 |   /// Returns the bounding box in the original (upright) image coordinate space.
+ 35 |   ///
+ 36 |   /// [uprightW] and [uprightH] are the dimensions of the upright image.
+ 37 |   Rect transformedBox(double uprightW, double uprightH) {
+ 38 |     if (!rotated) return block.boundingBox;
+ 39 |     // 180° rotation: (x, y) → (W - x, H - y)
+ 40 |     // So the original-space point is (rotW - x, rotH - y).
+ 41 |     // The bounding box in original space is therefore:
+ 42 |     //   left = uprightW - box.right
+ 43 |     //   top = uprightH - box.bottom
+ 44 |     //   right = uprightW - box.left
+ 45 |     //   bottom = uprightH - box.top
+ 46 |     final b = block.boundingBox;
+ 47 |     return Rect.fromLTRB(
+ 48 |       uprightW - b.right,
+ 49 |       uprightH - b.bottom,
+ 50 |       uprightW - b.left,
+
+============================================================
+第 28 页
+============================================================
+
+  1 |       uprightH - b.top,
+  2 |     );
+  3 |   }
+  4 | }
+  5 | 
+  6 | // ===== FILE: lib/services/ocr_service.dart (341 lines) =====
+  7 | /// Service for extracting and validating meal codes from OCR text.
+  8 | ///
+  9 | /// Supports multiple delivery platforms:
+ 10 | /// - 美团外卖 (Meituan): `#65 美团外卖`
+ 11 | /// - 饿了么 (Ele.me): `[ 饿了么 ] #2`
+ 12 | /// - 京东外卖 (JD Takeout): `#6 京东外卖`
+ 13 | /// - 淘宝闪购 (Taobao Flash): `#18 淘宝闪购`
+ 14 | /// - 美团闪购 (Meituan Flash): `#92 美团闪购`
+ 15 | /// - 朴朴超市 (Pupu): `朴朴超市 #586132`
+ 16 | /// - 美团直送 (Meituan Direct): `美团-261`
+ 17 | ///
+ 18 | /// The pickup code and platform name always appear together on the receipt.
+ 19 | /// We use proximity-based detection: find the platform keyword closest to
+ 20 | /// the pickup code to avoid false matches from footer text like
+ 21 | /// "登录饿了么商家版".
+ 22 | ///
+ 23 | /// Single-frame confirmation with 5-second cooldown to prevent duplicates.
+ 24 | class OcrService {
+ 25 |   /// Normalizes hash symbols so OCR output variations are treated equally.
+ 26 |   ///
+ 27 |   /// Replaces the full-width number sign (U+FF03) with the ASCII `#`.
+ 28 |   static String normalizeHashSymbols(String text) =>
+ 29 |       text.replaceAll('\uFF03', '#');
+ 30 | 
+ 31 |   /// Creates an [OcrService].
+ 32 |   ///
+ 33 |   /// The optional [clock] is used in tests to control time without real
+ 34 |   /// delays.
+ 35 |   OcrService({DateTime Function()? clock}) : _clock = clock ?? DateTime.now;
+ 36 | 
+ 37 |   final DateTime Function() _clock;
+ 38 | 
+ 39 |   /// Matches `#` followed by 1-6 digits (covers all major platforms including
+ 40 |   /// 朴朴超市's 6-digit codes).
+ 41 |   static final _mealCodeRegex = RegExp(r'#(\d{1,6})');
+ 42 | 
+ 43 |   /// Matches `#` with optional whitespace before digits, requiring the
+ 44 |   /// captured run not to be followed by another digit or a decimal separator.
+ 45 |   /// Used for fuzzy extraction when OCR splits the hash and the number.
+ 46 |   static final _fuzzyCodeRegex = RegExp(r'#\s*(\d{1,6})(?![\d.,])');
+ 47 | 
+ 48 |   /// Matches `美团-数字` format (e.g. `美团-261`).
+ 49 |   static final _meituanDashRegex = RegExp(r'美团-(\d{1,6})');
+ 50 | 
+
+============================================================
+第 29 页
+============================================================
+
+  1 |   /// Platform detection rules, ordered by priority (most specific first).
+  2 |   /// Short keywords like "闪购" are excluded to avoid false matches when
+  3 |   /// multiple receipts are in the same frame.
+  4 |   static const _platformRules = <_PlatformRule>[
+  5 |     _PlatformRule('淘宝闪购', '淘宝闪购'),
+  6 |     _PlatformRule('美团闪购', '美团闪购'),
+  7 |     _PlatformRule('朴朴超市', '朴朴超市'),
+  8 |     _PlatformRule('朴朴', '朴朴超市'),
+  9 |     _PlatformRule('永辉超市', '永辉超市'),
+ 10 |     _PlatformRule('永辉', '永辉超市'),
+ 11 |     _PlatformRule('京东外卖', '京东外卖'),
+ 12 |     _PlatformRule('京东', '京东外卖'),
+ 13 |     _PlatformRule('美团外卖', '美团外卖'),
+ 14 |     _PlatformRule('美团', '美团外卖'),
+ 15 |     _PlatformRule('饿了么', '饿了么'),
+ 16 |   ];
+ 17 | 
+ 18 |   /// Maximum character distance between a code and its platform keyword.
+ 19 |   /// Only keywords within this window are considered, preventing
+ 20 |   /// cross-receipt misidentification when multiple receipts are in frame.
+ 21 |   static const proximityMaxDistance = 8;
+ 22 | 
+ 23 |   /// Maximum character distance between a fuzzy code and its platform keyword.
+ 24 |   /// Allows the platform name and the code to be separated by a few words or
+ 25 |   /// a line break.
+ 26 |   static const _fuzzyPlatformWindow = 30;
+ 27 | 
+ 28 |   /// Maximum character distance when falling back to full-frame context for
+ 29 |   /// platform detection. Slightly larger than [proximityMaxDistance] so that
+ 30 |   /// platform names and codes on adjacent lines of the same receipt match,
+ 31 |   /// while still avoiding cross-receipt misidentification in most cases.
+ 32 |   static const _contextMaxDistance = 40;
+ 33 | 
+ 34 |   /// Fuzzy regex for JD Takeout: "京" + 0-2 chars + "外卖".
+ 35 |   /// OCR on thermal paper often misreads "京东外卖" as "京不外卖" etc.
+ 36 |   static final _jdFuzzyRegex = RegExp(r'京.{0,2}外卖');
+ 37 | 
+ 38 |   /// Per-code cooldown map: code → expiry time.
+ 39 |   /// Allows detecting new codes while suppressing repeats.
+ 40 |   final Map<String, DateTime> _cooldownMap = {};
+ 41 | 
+ 42 |   /// Cooldown duration: 5 seconds per code.
+ 43 |   static const _cooldownDuration = Duration(seconds: 5);
+ 44 | 
+ 45 |   /// Extracts all meal codes from the given text.
+ 46 |   ///
+ 47 |   /// Supports two formats:
+ 48 |   /// - `#数字` (1-6 digits) — standard format for most platforms
+ 49 |   /// - `美团-数字` — Meituan direct delivery format
+ 50 |   List<String> extractMealCodes(String text) {
+
+============================================================
+第 30 页
+============================================================
+
+  1 |     final normalized = normalizeHashSymbols(text);
+  2 |     final codes = <String>{};
+  3 | 
+  4 |     // Standard # + digits format
+  5 |     for (final match in _mealCodeRegex.allMatches(normalized)) {
+  6 |       codes.add('#${match.group(1)}');
+  7 |     }
+  8 | 
+  9 |     // 美团-数字 format (no # prefix)
+ 10 |     for (final match in _meituanDashRegex.allMatches(normalized)) {
+ 11 |       codes.add('#${match.group(1)}');
+ 12 |     }
+ 13 | 
+ 14 |     return codes.toList();
+ 15 |   }
+ 16 | 
+ 17 |   /// Fuzzy extraction fallback for codes that strict regex misses.
+ 18 |   ///
+ 19 |   /// Some real-world OCR outputs separate the `#` and the digits with a space
+ 20 |   /// or use a full-width `#`. This method extracts `# 数字` or `＃数字` as a
+ 21 |   /// code, but only when a delivery platform keyword is nearby. Requiring the
+ 22 |   /// platform keyword reduces false positives from prices, order IDs, or
+ 23 |   /// arbitrary text that happens to contain `#` and digits.
+ 24 |   List<String> extractMealCodesFuzzy(String text) {
+ 25 |     final normalized = normalizeHashSymbols(text);
+ 26 |     final codes = <String>{};
+ 27 | 
+ 28 |     for (final match in _fuzzyCodeRegex.allMatches(normalized)) {
+ 29 |       final code = '#${match.group(1)}';
+ 30 |       if (_hasPlatformNear(normalized, match.start, match.end)) {
+ 31 |         codes.add(code);
+ 32 |       }
+ 33 |     }
+ 34 | 
+ 35 |     return codes.toList();
+ 36 |   }
+ 37 | 
+ 38 |   /// Returns true when any platform keyword is within [_fuzzyPlatformWindow]
+ 39 |   /// characters of the code span [codeStart]..[codeEnd].
+ 40 |   bool _hasPlatformNear(String text, int codeStart, int codeEnd) {
+ 41 |     for (final rule in _platformRules) {
+ 42 |       var searchFrom = 0;
+ 43 |       while (true) {
+ 44 |         final idx = text.indexOf(rule.keyword, searchFrom);
+ 45 |         if (idx < 0) break;
+ 46 |         final keywordEnd = idx + rule.keyword.length;
+ 47 |         final distance = idx < codeStart
+ 48 |             ? codeStart - keywordEnd
+ 49 |             : idx - codeEnd;
+ 50 |         if (distance <= _fuzzyPlatformWindow) return true;

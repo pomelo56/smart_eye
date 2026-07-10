@@ -47,6 +47,8 @@
 | 无线 ADB 测试方法 | MacBook Air 无 USB 接口，使用 `adb pair` + `adb connect` 进行无线调试安装 | 实机测试验证 | 2026-07-02 |
 | flutter_assets 路径陷阱 | Android AssetManager 需要 `flutter_assets/` 前缀才能找到 Flutter 打包的 asset 文件 | 实机测试验证 | 2026-07-02 |
 | 音频叠加问题 | `speak()` 是 fire-and-forget（不等待音频完成），如果连续调用两个 `speak()` 会出现声音重叠。不能用 `delay + stop()` 来「修复」，因为音频时长不确定。正确方案：只保留一个启动语音，或合并到一个连续播报中。 | 实机测试验证（重复踩坑 2 次） | 2026-07-04 |
+| 应用内更新源优先 Gitee，GitHub 兜底 | Gitee 是国内源，访问更快更稳定；GitHub 作为 fallback 防止 Gitee 不可用。必须同时维护两个 Release，否则 fallback 到 GitHub 在国内可能连接超时。 | 实机测试验证（2026-07-10 因未同步发布 Gitee Release 导致下载卡死） | 2026-07-10 |
+| 摄像头「永久拒绝」误判 | `shouldShowRequestPermissionRationale()` 在首次安装（未请求过权限）时也返回 `false`，导致首次启动被误判为永久拒绝。必须持久化「是否请求过」标志，且该标志必须放在 `noBackupFilesDir` 中，避免 OEM/ColorOS/Google 备份在卸载重装后恢复旧标志。 | 实机测试验证（2026-07-10 因 SharedPreferences 被备份恢复复现） | 2026-07-10 |
 
 ---
 

@@ -29,6 +29,10 @@ class UpdateInfo {
 
 /// Checks Gitee/GitHub Releases for a newer APK.
 ///
+/// Update source priority (documented in MEMORY.md):
+/// 1. Gitee Releases — primary source for mainland China users (faster).
+/// 2. GitHub Releases — fallback when Gitee is unavailable or not synced.
+///
 /// The check is throttled to once per week and only runs on Wi-Fi to avoid
 /// surprising users with cellular data usage.
 class UpdateService {

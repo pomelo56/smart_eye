@@ -1,0 +1,1649 @@
+慧眼 SmartEye 软件源代码（续）
+版本：v0.8.0
+============================================================
+
+  1 | enum PermissionStatus { unknown, granted, denied, permanentlyDenied }
+  2 | 
+  3 | /// Platform interface for permission operations.
+  4 | ///
+  5 | /// Production code injects [PermissionPlatformAndroid], tests inject a
+  6 | /// fake. The interface is intentionally narrow: only what the app's
+  7 | /// permission flow actually needs.
+  8 | abstract class PermissionPlatform {
+  9 |   /// Returns the current camera permission status without prompting the
+ 10 |   /// user.
+ 11 |   Future<PermissionStatus> checkCameraPermission();
+ 12 | 
+ 13 |   /// Triggers the system permission dialog. Returns the user's choice.
+ 14 |   ///
+ 15 |   /// On Android, this maps to the runtime permission request that pops up
+ 16 |   /// the first time the camera is needed.
+ 17 |   Future<PermissionStatus> requestCameraPermission();
+ 18 | 
+ 19 |   /// Opens the app's page in the system settings app.
+ 20 |   ///
+ 21 |   /// Used as a recovery path when the user has selected "Don't ask again"
+ 22 |   /// and the system dialog will no longer be shown. The app cannot grant
+ 23 |   /// itself permission, so the user must enable it from settings.
+ 24 |   Future<bool> openAppSettings();
+ 25 | }
+ 26 | 
+ 27 | /// Camera permission service.
+ 28 | ///
+ 29 | /// This is the single entry point for everything camera-permission-related
+ 30 | /// in the app. It exposes a synchronous [cameraStatus] for UI/state checks
+ 31 | /// and a small set of async actions ([checkCameraPermission],
+ 32 | /// [requestCameraPermission], [openAppSettings]).
+ 33 | ///
+ 34 | /// Design notes:
+ 35 | /// - We do not depend on `permission_handler` to avoid an extra ~2 MB of
+ 36 | ///   native code. The `camera` plugin already throws
+ 37 | ///   `CameraException(CameraAccessDenied, ...)` when permission is missing,
+ 38 | ///   and the Android `PackageManager.checkPermission` API is reachable via
+ 39 | ///   a [MethodChannel] without any new dependency.
+ 40 | /// - State is held as a single field rather than a stream so the HomeScreen
+ 41 | ///   can read the current status synchronously in `build()`.
+ 42 | class PermissionService {
+ 43 |   PermissionService({PermissionPlatform? platform})
+ 44 |       : _platform = platform ?? _DefaultPermissionPlatform();
+ 45 | 
+ 46 |   final PermissionPlatform _platform;
+ 47 | 
+ 48 |   PermissionStatus _status = PermissionStatus.unknown;
+ 49 | 
+ 50 |   /// The most recent known camera permission status.
+
+============================================================
+第 32 页
+============================================================
+
+  1 |   ///
+  2 |   /// Starts as [PermissionStatus.unknown] and is updated by every call to
+  3 |   /// [checkCameraPermission] or [requestCameraPermission].
+  4 |   PermissionStatus get cameraStatus => _status;
+  5 | 
+  6 |   /// True if the user has previously selected "Don't ask again" (or has
+  7 |   /// revoked the permission from settings). In this state, calling
+  8 |   /// [requestCameraPermission] will no longer show the system dialog — the
+  9 |   /// user must be guided to system settings instead.
+ 10 |   bool get isPermanentlyDenied => _status == PermissionStatus.permanentlyDenied;
+ 11 | 
+ 12 |   /// Refreshes [cameraStatus] from the platform without prompting the user.
+ 13 |   Future<PermissionStatus> checkCameraPermission() {
+ 14 |     return _platform.checkCameraPermission().then((s) {
+ 15 |       _status = s;
+ 16 |       return s;
+ 17 |     });
+ 18 |   }
+ 19 | 
+ 20 |   /// Prompts the user for camera permission.
+ 21 |   ///
+ 22 |   /// The system dialog is shown only on the first invocation. If the user
+ 23 |   /// has previously denied and selected "Don't ask again", the dialog will
+ 24 |   /// not appear and the result will be [PermissionStatus.permanentlyDenied].
+ 25 |   /// In that case the caller should route to [openAppSettings] instead of
+ 26 |   /// retrying.
+ 27 |   Future<PermissionStatus> requestCameraPermission() {
+ 28 |     return _platform.requestCameraPermission().then((s) {
+ 29 |       _status = s;
+ 30 |       return s;
+ 31 |     });
+ 32 |   }
+ 33 | 
+ 34 |   /// Opens the app's settings page so the user can manually enable
+ 35 |   /// camera access.
+ 36 |   ///
+ 37 |   /// Returns true if the settings app was successfully launched. Returns
+ 38 |   /// false if the platform could not start it (very rare — only happens
+ 39 |   /// on a broken system).
+ 40 |   Future<bool> openAppSettings() => _platform.openAppSettings();
+ 41 | }
+ 42 | 
+ 43 | /// Default [PermissionPlatform] implementation that talks to Android via
+ 44 | /// the [MethodChannel] exposed by `MainActivity`.
+ 45 | ///
+ 46 | /// We intentionally re-use the existing `com.smart_eye/audio` host
+ 47 | /// activity rather than introducing a new one. The activity is already
+ 48 | /// guaranteed to be alive when permission checks run, and the channel
+ 49 | /// is already declared in `proguard-rules.pro` for MainActivity, so R8
+ 50 | /// will not strip the handler.
+
+============================================================
+第 33 页
+============================================================
+
+  1 | class _DefaultPermissionPlatform implements PermissionPlatform {
+  2 |   static const _channel = MethodChannel('com.smart_eye/permission');
+  3 | 
+  4 |   @override
+  5 |   Future<PermissionStatus> checkCameraPermission() async {
+  6 |     try {
+  7 |       final raw = await _channel.invokeMethod<String>('checkCamera');
+  8 |       return _parseStatus(raw);
+  9 |     } on MissingPluginException catch (e) {
+ 10 |       // Channel not wired up (e.g. running in a unit test that didn't
+ 11 |       // mock the platform). Treat as unknown so the caller can decide
+ 12 |       // how to proceed — usually by attempting to use the camera and
+ 13 |       // catching the resulting CameraException.
+ 14 |       debugPrint('[Permission] checkCamera: channel not available: $e');
+ 15 |       return PermissionStatus.unknown;
+ 16 |     } on PlatformException catch (e) {
+ 17 |       debugPrint('[Permission] checkCamera: platform error: $e');
+ 18 |       return PermissionStatus.unknown;
+ 19 |     }
+ 20 |   }
+ 21 | 
+ 22 |   @override
+ 23 |   Future<PermissionStatus> requestCameraPermission() async {
+ 24 |     try {
+ 25 |       final raw = await _channel.invokeMethod<String>('requestCamera');
+ 26 |       return _parseStatus(raw);
+ 27 |     } on MissingPluginException catch (e) {
+ 28 |       debugPrint('[Permission] requestCamera: channel not available: $e');
+ 29 |       return PermissionStatus.unknown;
+ 30 |     } on PlatformException catch (e) {
+ 31 |       debugPrint('[Permission] requestCamera: platform error: $e');
+ 32 |       return PermissionStatus.unknown;
+ 33 |     }
+ 34 |   }
+ 35 | 
+ 36 |   @override
+ 37 |   Future<bool> openAppSettings() async {
+ 38 |     try {
+ 39 |       final ok = await _channel.invokeMethod<bool>('openAppSettings');
+ 40 |       return ok ?? false;
+ 41 |     } on MissingPluginException catch (e) {
+ 42 |       debugPrint('[Permission] openAppSettings: channel not available: $e');
+ 43 |       return false;
+ 44 |     } on PlatformException catch (e) {
+ 45 |       debugPrint('[Permission] openAppSettings: platform error: $e');
+ 46 |       return false;
+ 47 |     }
+ 48 |   }
+ 49 | 
+ 50 |   static PermissionStatus _parseStatus(String? raw) {
+
+============================================================
+第 34 页
+============================================================
+
+  1 |     switch (raw) {
+  2 |       case 'granted':
+  3 |         return PermissionStatus.granted;
+  4 |       case 'denied':
+  5 |         return PermissionStatus.denied;
+  6 |       case 'permanently_denied':
+  7 |       case 'permanentlyDenied':
+  8 |         return PermissionStatus.permanentlyDenied;
+  9 |       default:
+ 10 |         return PermissionStatus.unknown;
+ 11 |     }
+ 12 |   }
+ 13 | }
+ 14 | 
+ 15 | // ===== FILE: lib/services/luminance_detector.dart (215 lines) =====
+ 16 | import 'dart:math' as math;
+ 17 | import 'dart:typed_data';
+ 18 | 
+ 19 | import 'package:camera/camera.dart';
+ 20 | 
+ 21 | /// Coarse luminance category used to decide whether to suggest turning
+ 22 | /// the torch on.
+ 23 | ///
+ 24 | /// The thresholds are deliberately generous: a frame that *looks* dim
+ 25 | /// to a human is what we care about, not a precise photometric value.
+ 26 | /// 40/255 is roughly the "you can read the text but it's straining"
+ 27 | /// boundary on a phone screen, and 80/255 is the "comfortable" boundary.
+ 28 | enum LuminanceBucket { dark, normal, bright }
+ 29 | 
+ 30 | /// Result of [LuminanceDetector.analyze].
+ 31 | class LuminanceResult {
+ 32 |   const LuminanceResult({required this.luminance, required this.bucket});
+ 33 | 
+ 34 |   /// Mean luminance of the analyzed frame, 0-255.
+ 35 |   final int luminance;
+ 36 | 
+ 37 |   /// Coarse bucket derived from [luminance].
+ 38 |   final LuminanceBucket bucket;
+ 39 | 
+ 40 |   /// True when the frame is dark enough that the user is likely to
+ 41 |   /// have trouble reading the receipt. The caller should:
+ 42 |   /// 1. Play the "lighting is dim" voice prompt (with the 8s cooldown
+ 43 |   ///    the rest of the app uses for distance feedback).
+ 44 |   /// 2. Try to turn the torch on.
+ 45 |   bool get shouldSuggestTorch => bucket == LuminanceBucket.dark;
+ 46 | }
+ 47 | 
+ 48 | /// Analyzes a YUV420 frame's Y (luma) plane and returns its mean
+ 49 | /// luminance and a coarse bucket.
+ 50 | ///
+
+============================================================
+第 35 页
+============================================================
+
+  1 | /// The Y plane is grayscale and represents what the human eye perceives
+  2 | /// as brightness — it is the right input for a "can the user see this?"
+  3 | /// check, and it is 1/3 the size of an RGB frame, so it is cheap to
+  4 | /// scan. The [camera] plugin exposes the Y plane via
+  5 | /// `CameraImage.planes[0]`.
+  6 | ///
+  7 | /// Sampling: the analyzer does not need to visit every pixel to make a
+  8 | /// good decision. A 64-cell grid (8x8 samples) is statistically
+  9 | /// representative for a phone camera frame and runs in well under 1 ms
+ 10 | /// in release mode. Sampling more cells does not meaningfully change
+ 11 | /// the result, but does increase cost linearly.
+ 12 | class LuminanceDetector {
+ 13 |   /// Number of cells per axis to sample. 8x8 = 64 samples is enough to
+ 14 |   /// cover a 720p frame at 90x90 pixel granularity.
+ 15 |   static const int _gridSize = 8;
+ 16 | 
+ 17 |   /// Bucket thresholds. Luminance is integer 0-255.
+ 18 |   static const int darkThreshold = 40;
+ 19 |   static const int brightThreshold = 200;
+ 20 | 
+ 21 |   /// Analyzes a YUV420 Y plane and returns the mean luminance and bucket.
+ 22 |   ///
+ 23 |   /// [yPlaneBytes] must be the raw bytes of the Y plane (plane index 0
+ 24 |   /// in `CameraImage.planes`). [yPlaneRowStride] is the number of bytes
+ 25 |   /// per row of the Y plane (may be larger than [width] when the camera
+ 26 |   /// uses padding for alignment). [yPlanePixelStride] is the byte
+ 27 |   /// distance between adjacent pixels in the Y plane; on YUV420 this
+ 28 |   /// is always 1, but we accept the value to be safe.
+ 29 |   static LuminanceResult analyze({
+ 30 |     required Uint8List yPlaneBytes,
+ 31 |     required int yPlaneRowStride,
+ 32 |     required int yPlanePixelStride,
+ 33 |     required int width,
+ 34 |     required int height,
+ 35 |   }) {
+ 36 |     if (width <= 0 || height <= 0) {
+ 37 |       // Empty frame: treat as dark so the user gets prompted.
+ 38 |       return const LuminanceResult(
+ 39 |         luminance: 0,
+ 40 |         bucket: LuminanceBucket.dark,
+ 41 |       );
+ 42 |     }
+ 43 | 
+ 44 |     final cellW = math.max(1, width ~/ _gridSize);
+ 45 |     final cellH = math.max(1, height ~/ _gridSize);
+ 46 | 
+ 47 |     var sum = 0;
+ 48 |     var count = 0;
+ 49 | 
+ 50 |     for (var gy = 0; gy < _gridSize; gy++) {
+
+============================================================
+第 36 页
+============================================================
+
+  1 |       final y = (gy * cellH).clamp(0, height - 1);
+  2 |       for (var gx = 0; gx < _gridSize; gx++) {
+  3 |         final x = (gx * cellW).clamp(0, width - 1);
+  4 |         final byteIndex = y * yPlaneRowStride + x * yPlanePixelStride;
+  5 |         if (byteIndex < 0 || byteIndex >= yPlaneBytes.length) {
+  6 |           // Defensive: out-of-bounds means the stride/width combo is
+  7 |           // inconsistent. Skip rather than crash.
+  8 |           continue;
+  9 |         }
+ 10 |         sum += yPlaneBytes[byteIndex];
+ 11 |         count++;
+ 12 |       }
+ 13 |     }
+ 14 | 
+ 15 |     return _buildResult(sum, count);
+ 16 |   }
+ 17 | 
+ 18 |   /// Analyzes an RGBA8888 buffer and returns the mean luminance.
+ 19 |   ///
+ 20 |   /// This is the path used when the camera delivers JPEG (e.g. via
+ 21 |   /// `takePicture()`) and we decode it through `dart:ui`. The input
+ 22 |   /// must be 4 bytes per pixel in R, G, B, A order — exactly what
+ 23 |   /// `ui.Image.toByteData(format: ImageByteFormat.rawRgba)` produces.
+ 24 |   ///
+ 25 |   /// We compute luminance using the BT.601 luma weights because they
+ 26 |   /// approximate what a human eye perceives better than a naive
+ 27 |   /// (R+G+B)/3 average. The result is rounded to an int 0-255 to match
+ 28 |   /// the Y-plane path's output range and the [LuminanceBucket]
+ 29 |   /// thresholds.
+ 30 |   static LuminanceResult analyzeRgba({
+ 31 |     required Uint8List rgbaBytes,
+ 32 |     required int width,
+ 33 |     required int height,
+ 34 |   }) {
+ 35 |     if (width <= 0 || height <= 0) {
+ 36 |       return const LuminanceResult(
+ 37 |         luminance: 0,
+ 38 |         bucket: LuminanceBucket.dark,
+ 39 |       );
+ 40 |     }
+ 41 | 
+ 42 |     final cellW = math.max(1, width ~/ _gridSize);
+ 43 |     final cellH = math.max(1, height ~/ _gridSize);
+ 44 |     final stride = width * 4;
+ 45 | 
+ 46 |     var sum = 0;
+ 47 |     var count = 0;
+ 48 | 
+ 49 |     for (var gy = 0; gy < _gridSize; gy++) {
+ 50 |       final y = (gy * cellH).clamp(0, height - 1);
+
+============================================================
+第 37 页
+============================================================
+
+  1 |       for (var gx = 0; gx < _gridSize; gx++) {
+  2 |         final x = (gx * cellW).clamp(0, width - 1);
+  3 |         final pixelOffset = y * stride + x * 4;
+  4 |         if (pixelOffset + 2 >= rgbaBytes.length) {
+  5 |           continue;
+  6 |         }
+  7 |         // BT.601 luma (same weights the YUV Y plane uses, so the bucket
+  8 |         // thresholds below are consistent across paths).
+  9 |         final r = rgbaBytes[pixelOffset];
+ 10 |         final g = rgbaBytes[pixelOffset + 1];
+ 11 |         final b = rgbaBytes[pixelOffset + 2];
+ 12 |         // 0.299 R + 0.587 G + 0.114 B
+ 13 |         final luma = (0.299 * r + 0.587 * g + 0.114 * b).round();
+ 14 |         sum += luma;
+ 15 |         count++;
+ 16 |       }
+ 17 |     }
+ 18 | 
+ 19 |     return _buildResult(sum, count);
+ 20 |   }
+ 21 | 
+ 22 |   static LuminanceResult _buildResult(int sum, int count) {
+ 23 |     if (count == 0) {
+ 24 |       return const LuminanceResult(
+ 25 |         luminance: 0,
+ 26 |         bucket: LuminanceBucket.dark,
+ 27 |       );
+ 28 |     }
+ 29 |     final mean = sum ~/ count;
+ 30 |     final bucket = mean < darkThreshold
+ 31 |         ? LuminanceBucket.dark
+ 32 |         : (mean > brightThreshold
+ 33 |             ? LuminanceBucket.bright
+ 34 |             : LuminanceBucket.normal);
+ 35 |     return LuminanceResult(luminance: mean, bucket: bucket);
+ 36 |   }
+ 37 | }
+ 38 | 
+ 39 | /// Wraps a [CameraController] to provide idempotent torch on/off with
+ 40 | /// graceful handling of unsupported hardware.
+ 41 | ///
+ 42 | /// The [camera] plugin throws [CameraException] if the device does not
+ 43 | /// support torch (rare, but happens on some emulators and very old
+ 44 | /// hardware). We catch that and report failure to the caller rather
+ 45 | /// than crashing the scanning loop.
+ 46 | class TorchController {
+ 47 |   TorchController({required CameraController controller})
+ 48 |       : _controller = controller;
+ 49 | 
+ 50 |   final CameraController _controller;
+
+============================================================
+第 38 页
+============================================================
+
+  1 |   bool _isOn = false;
+  2 | 
+  3 |   bool get isOn => _isOn;
+  4 | 
+  5 |   /// Turns the torch on (or off).
+  6 |   ///
+  7 |   /// Returns true if the camera accepted the new flash mode, false if
+  8 |   /// the hardware refused (e.g. the device has no torch). The caller
+  9 |   /// should speak a "torch failed, please enable it manually" prompt
+ 10 |   /// on false.
+ 11 |   Future<bool> setTorch(bool on) async {
+ 12 |     if (on == _isOn) {
+ 13 |       // Idempotent: do not spam setFlashMode. The camera plugin
+ 14 |       // accepts a redundant call but it still costs a native IPC.
+ 15 |       return true;
+ 16 |     }
+ 17 |     final mode = on ? FlashMode.torch : FlashMode.off;
+ 18 |     try {
+ 19 |       await _controller.setFlashMode(mode);
+ 20 |       _isOn = on;
+ 21 |       return true;
+ 22 |     } on CameraException {
+ 23 |       // Hardware refused. We deliberately do not log here — the caller
+ 24 |       // (HomeScreen) is responsible for surfacing the failure as a
+ 25 |       // voice prompt and an entry in the on-screen log.
+ 26 |       _isOn = false;
+ 27 |       return false;
+ 28 |     }
+ 29 |   }
+ 30 | }
+ 31 | 
+ 32 | // ===== FILE: lib/services/history_service.dart (77 lines) =====
+ 33 | import 'package:shared_preferences/shared_preferences.dart';
+ 34 | 
+ 35 | import '../models/meal_code.dart';
+ 36 | 
+ 37 | /// Stores and retrieves the user's recent meal-code recognitions.
+ 38 | ///
+ 39 | /// Records are kept in [SharedPreferences] as a list of pipe-delimited strings.
+ 40 | /// Entries older than 24 hours are automatically discarded on read.
+ 41 | class HistoryService {
+ 42 |   static const _storageKey = 'meal_code_history';
+ 43 |   static const _maxRecords = 5;
+ 44 |   static const _retentionPeriod = Duration(hours: 24);
+ 45 | 
+ 46 |   final SharedPreferences _prefs;
+ 47 | 
+ 48 |   /// Creates a service using the provided [SharedPreferences] instance.
+ 49 |   HistoryService({required SharedPreferences prefs}) : _prefs = prefs;
+ 50 | 
+
+============================================================
+第 39 页
+============================================================
+
+  1 |   /// Adds a new recognition record.
+  2 |   ///
+  3 |   /// If the same code was already recorded within the last 5 seconds, it is
+  4 |   /// ignored to avoid rapid duplicates from the multi-frame validation logic.
+  5 |   Future<void> add(String code, {String? platform}) async {
+  6 |     if (code.isEmpty) return;
+  7 | 
+  8 |     final records = await _readRecords();
+  9 | 
+ 10 |     // Avoid rapid duplicates (within 5 seconds).
+ 11 |     if (records.isNotEmpty) {
+ 12 |       final last = records.first;
+ 13 |       if (last.code == code &&
+ 14 |           DateTime.now().difference(last.recognizedAt) <
+ 15 |               const Duration(seconds: 5)) {
+ 16 |         return;
+ 17 |       }
+ 18 |     }
+ 19 | 
+ 20 |     records.insert(0,
+ 21 |         MealCode(code: code, recognizedAt: DateTime.now(), platform: platform));
+ 22 | 
+ 23 |     while (records.length > _maxRecords) {
+ 24 |       records.removeLast();
+ 25 |     }
+ 26 | 
+ 27 |     await _writeRecords(records);
+ 28 |   }
+ 29 | 
+ 30 |   /// Returns the recent records, newest first, with expired entries removed.
+ 31 |   Future<List<MealCode>> getRecent() async {
+ 32 |     final records = await _readRecords();
+ 33 |     final now = DateTime.now();
+ 34 |     final valid = records
+ 35 |         .where((r) => now.difference(r.recognizedAt) < _retentionPeriod)
+ 36 |         .toList();
+ 37 | 
+ 38 |     if (valid.length != records.length) {
+ 39 |       await _writeRecords(valid);
+ 40 |     }
+ 41 | 
+ 42 |     return valid;
+ 43 |   }
+ 44 | 
+ 45 |   /// Clears all stored records.
+ 46 |   Future<void> clear() async {
+ 47 |     await _prefs.remove(_storageKey);
+ 48 |   }
+ 49 | 
+ 50 |   Future<List<MealCode>> _readRecords() async {
+
+============================================================
+第 40 页
+============================================================
+
+  1 |     final raw = _prefs.getStringList(_storageKey) ?? [];
+  2 |     return raw.map(MealCode.fromStorageString).whereType<MealCode>().toList();
+  3 |   }
+  4 | 
+  5 |   Future<void> _writeRecords(List<MealCode> records) async {
+  6 |     final raw = records.map((r) => r.toStorageString()).toList();
+  7 |     await _prefs.setStringList(_storageKey, raw);
+  8 |   }
+  9 | }
+ 10 | 
+ 11 | // ===== FILE: lib/services/file_logger.dart (170 lines) =====
+ 12 | import 'dart:io';
+ 13 | 
+ 14 | import 'package:flutter/foundation.dart';
+ 15 | import 'package:path_provider/path_provider.dart';
+ 16 | 
+ 17 | /// Persistent file logger for field diagnostics.
+ 18 | ///
+ 19 | /// Writes all log messages to a timestamped file in the app's
+ 20 | /// documents directory. Logs are rotated daily (max 7 days).
+ 21 | /// Use [export] to copy the current log to a user-accessible path.
+ 22 | class FileLogger {
+ 23 |   static FileLogger? _instance;
+ 24 |   static FileLogger get instance => _instance ??= FileLogger._();
+ 25 |   FileLogger._();
+ 26 | 
+ 27 |   File? _logFile;
+ 28 |   String? _logDir;
+ 29 |   bool _initialized = false;
+ 30 | 
+ 31 |   /// Maximum log files to keep (7 days).
+ 32 |   static const _maxLogFiles = 7;
+ 33 | 
+ 34 |   /// In-memory buffer for screen display.
+ 35 |   final List<String> screenBuffer = [];
+ 36 | 
+ 37 |   /// Maximum number of lines shown on the screen overlay.
+ 38 |   static const maxScreenLines = 8;
+ 39 | 
+ 40 |   /// Notifies listeners when [screenBuffer] changes.
+ 41 |   ///
+ 42 |   /// Widgets can listen to this instead of rebuilding on every log write
+ 43 |   /// via a full setState.
+ 44 |   final ValueNotifier<List<String>> screenBufferNotifier =
+ 45 |       ValueNotifier<List<String>>(const []);
+ 46 | 
+ 47 |   /// Initialize the logger. Call once at app startup.
+ 48 |   Future<void> initialize() async {
+ 49 |     if (_initialized) return;
+ 50 |     try {
+
+============================================================
+第 41 页
+============================================================
+
+  1 |       final dir = await getApplicationDocumentsDirectory();
+  2 |       _logDir = dir.path;
+  3 |       await _rotateIfNeeded();
+  4 |       _logFile = await _createLogFile();
+  5 |       _initialized = true;
+  6 |       await write('INFO', 'FileLogger 初始化完成, dir=$_logDir');
+  7 |     } catch (e) {
+  8 |       debugPrint('[FileLogger] 初始化失败: $e');
+  9 |     }
+ 10 |   }
+ 11 | 
+ 12 |   Future<File> _createLogFile() async {
+ 13 |     final now = DateTime.now();
+ 14 |     final dateStr =
+ 15 |         '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+ 16 |     final timeStr =
+ 17 |         '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+ 18 |     final filename = 'smarteye_${dateStr}_$timeStr.log';
+ 19 |     return File('$_logDir/$filename');
+ 20 |   }
+ 21 | 
+ 22 |   Future<void> _rotateIfNeeded() async {
+ 23 |     if (_logDir == null) return;
+ 24 |     final dir = Directory(_logDir!);
+ 25 |     if (!await dir.exists()) return;
+ 26 | 
+ 27 |     final logFiles = await dir
+ 28 |         .list()
+ 29 |         .where((e) => e is File && e.path.endsWith('.log'))
+ 30 |         .cast<File>()
+ 31 |         .toList();
+ 32 | 
+ 33 |     if (logFiles.length <= _maxLogFiles) return;
+ 34 | 
+ 35 |     // Sort by modification time, delete oldest
+ 36 |     logFiles.sort((a, b) {
+ 37 |       return FileStat.statSync(a.path)
+ 38 |           .modified
+ 39 |           .compareTo(FileStat.statSync(b.path).modified);
+ 40 |     });
+ 41 | 
+ 42 |     final toDelete = logFiles.length - _maxLogFiles;
+ 43 |     for (var i = 0; i < toDelete; i++) {
+ 44 |       try {
+ 45 |         await logFiles[i].delete();
+ 46 |       } catch (_) {}
+ 47 |     }
+ 48 |   }
+ 49 | 
+ 50 |   /// Write a log line to both file and screen buffer.
+
+============================================================
+第 42 页
+============================================================
+
+  1 |   Future<void> write(String level, String message) async {
+  2 |     final now = DateTime.now();
+  3 |     final timestamp = '${now.hour.toString().padLeft(2, '0')}:'
+  4 |         '${now.minute.toString().padLeft(2, '0')}:'
+  5 |         '${now.second.toString().padLeft(2, '0')}';
+  6 |     final line = '[$timestamp][$level] $message';
+  7 | 
+  8 |     // Screen buffer (for overlay display)
+  9 |     if (screenBuffer.length >= maxScreenLines) {
+ 10 |       screenBuffer.removeAt(0);
+ 11 |     }
+ 12 |     screenBuffer.add(line);
+ 13 |     screenBufferNotifier.value = List<String>.unmodifiable(screenBuffer);
+ 14 | 
+ 15 |     // debugPrint for logcat
+ 16 |     debugPrint('[慧眼] $line');
+ 17 | 
+ 18 |     // File write (fire-and-forget to avoid blocking)
+ 19 |     if (_logFile != null) {
+ 20 |       try {
+ 21 |         await _logFile!.writeAsString('$line\n', mode: FileMode.append);
+ 22 |       } catch (e) {
+ 23 |         debugPrint('[FileLogger] 写入失败: $e');
+ 24 |       }
+ 25 |     }
+ 26 |   }
+ 27 | 
+ 28 |   /// Export current log file content as a string.
+ 29 |   Future<String> exportContent() async {
+ 30 |     if (_logFile == null || !await _logFile!.exists()) {
+ 31 |       return 'No log file available';
+ 32 |     }
+ 33 |     try {
+ 34 |       return await _logFile!.readAsString();
+ 35 |     } catch (e) {
+ 36 |       return 'Error reading log: $e';
+ 37 |     }
+ 38 |   }
+ 39 | 
+ 40 |   /// Copy current log to Downloads directory for easy sharing.
+ 41 |   /// Returns the export path, or null on failure.
+ 42 |   Future<String?> exportToDownloads() async {
+ 43 |     if (_logFile == null || !await _logFile!.exists()) return null;
+ 44 | 
+ 45 |     try {
+ 46 |       // Try /storage/emulated/0/Download (most Android devices)
+ 47 |       final downloadsDir = Directory('/storage/emulated/0/Download');
+ 48 |       if (!await downloadsDir.exists()) {
+ 49 |         // Fallback: use app's external storage
+ 50 |         final extDir = await getExternalStorageDirectory();
+
+============================================================
+第 43 页
+============================================================
+
+  1 |         if (extDir == null) return null;
+  2 |         final target = File('${extDir.path}/${_logFile!.path.split('/').last}');
+  3 |         await _logFile!.copy(target.path);
+  4 |         return target.path;
+  5 |       }
+  6 | 
+  7 |       final filename = _logFile!.path.split('/').last;
+  8 |       final target = File('${downloadsDir.path}/$filename');
+  9 |       await _logFile!.copy(target.path);
+ 10 |       return target.path;
+ 11 |     } catch (e) {
+ 12 |       debugPrint('[FileLogger] 导出失败: $e');
+ 13 |       return null;
+ 14 |     }
+ 15 |   }
+ 16 | 
+ 17 |   /// Get the current log file path.
+ 18 |   String? get logFilePath => _logFile?.path;
+ 19 | 
+ 20 |   /// Get all log file paths.
+ 21 |   Future<List<String>> getLogFiles() async {
+ 22 |     if (_logDir == null) return [];
+ 23 |     final dir = Directory(_logDir!);
+ 24 |     if (!await dir.exists()) return [];
+ 25 |     return dir
+ 26 |         .list()
+ 27 |         .where((e) => e is File && e.path.endsWith('.log'))
+ 28 |         .map((e) => e.path)
+ 29 |         .toList();
+ 30 |   }
+ 31 | }
+ 32 | 
+ 33 | // ===== FILE: lib/services/update_service.dart (152 lines) =====
+ 34 | import 'package:dio/dio.dart';
+ 35 | import 'package:package_info_plus/package_info_plus.dart';
+ 36 | import 'package:shared_preferences/shared_preferences.dart';
+ 37 | 
+ 38 | import 'connectivity_service.dart';
+ 39 | 
+ 40 | /// Information about a remote app update.
+ 41 | class UpdateInfo {
+ 42 |   /// Creates an [UpdateInfo].
+ 43 |   const UpdateInfo({
+ 44 |     required this.versionCode,
+ 45 |     required this.versionName,
+ 46 |     required this.downloadUrl,
+ 47 |     required this.releaseNotes,
+ 48 |   });
+ 49 | 
+ 50 |   /// Remote Android `versionCode` (e.g. 14).
+
+============================================================
+第 44 页
+============================================================
+
+  1 |   final int versionCode;
+  2 | 
+  3 |   /// Human-readable version name parsed from the release tag (e.g. "0.8.0").
+  4 |   final String versionName;
+  5 | 
+  6 |   /// Direct download URL for `app-release.apk`.
+  7 |   final String downloadUrl;
+  8 | 
+  9 |   /// Release notes or body text from the release page.
+ 10 |   final String releaseNotes;
+ 11 | }
+ 12 | 
+ 13 | /// Checks Gitee/GitHub Releases for a newer APK.
+ 14 | ///
+ 15 | /// The check is throttled to once per week and only runs on Wi-Fi to avoid
+ 16 | /// surprising users with cellular data usage.
+ 17 | class UpdateService {
+ 18 |   static const _lastCheckKey = 'last_update_check_millis';
+ 19 |   static const _checkInterval = Duration.zero; // TODO: 测试完改回 Duration(days: 7)
+ 20 |   static const _assetName = 'app-release.apk';
+ 21 | 
+ 22 |   static const _giteeLatestUrl =
+ 23 |       'https://gitee.com/api/v5/repos/free-style_2_0/smart_eye/releases/latest';
+ 24 |   static const _githubLatestUrl =
+ 25 |       'https://api.github.com/repos/pomelo56/smart_eye/releases/latest';
+ 26 | 
+ 27 |   final SharedPreferences _prefs;
+ 28 |   final ConnectivityService _connectivity;
+ 29 |   final Dio _dio;
+ 30 |   final PackageInfo _packageInfo;
+ 31 |   final DateTime Function() _clock;
+ 32 | 
+ 33 |   /// Creates an [UpdateService].
+ 34 |   UpdateService({
+ 35 |     required SharedPreferences prefs,
+ 36 |     required ConnectivityService connectivity,
+ 37 |     required Dio dio,
+ 38 |     required PackageInfo packageInfo,
+ 39 |     DateTime Function()? clock,
+ 40 |   })  : _prefs = prefs,
+ 41 |         _connectivity = connectivity,
+ 42 |         _dio = dio,
+ 43 |         _packageInfo = packageInfo,
+ 44 |         _clock = clock ?? DateTime.now;
+ 45 | 
+ 46 |   /// Returns [UpdateInfo] when a newer version is available, or `null` when
+ 47 |   /// there is no update, the device is not on Wi-Fi, or the check was already
+ 48 |   /// performed within the last 7 days.
+ 49 |   ///
+ 50 |   /// Throws on network or parsing errors; callers should catch and provide
+
+============================================================
+第 45 页
+============================================================
+
+  1 |   /// voice feedback.
+  2 |   Future<UpdateInfo?> checkForUpdate() async {
+  3 |     if (!await _connectivity.isWifiConnected) return null;
+  4 | 
+  5 |     final lastCheckMillis = _prefs.getInt(_lastCheckKey);
+  6 |     final now = _clock();
+  7 |     if (lastCheckMillis != null) {
+  8 |       final lastCheck = DateTime.fromMillisecondsSinceEpoch(lastCheckMillis);
+  9 |       if (now.difference(lastCheck) < _checkInterval) return null;
+ 10 |     }
+ 11 | 
+ 12 |     try {
+ 13 |       final info = await _fetchLatest(_giteeLatestUrl);
+ 14 |       await _markChecked(now);
+ 15 |       return info;
+ 16 |     } catch (_) {
+ 17 |       // Gitee failed — try GitHub before giving up.
+ 18 |       final info = await _fetchLatest(_githubLatestUrl);
+ 19 |       await _markChecked(now);
+ 20 |       return info;
+ 21 |     }
+ 22 |   }
+ 23 | 
+ 24 |   /// Parses a release response and returns an [UpdateInfo] only when the
+ 25 |   /// remote version is newer than the local version.
+ 26 |   Future<UpdateInfo?> _fetchLatest(String url) async {
+ 27 |     final response = await _dio.get<Map<String, dynamic>>(
+ 28 |       url,
+ 29 |       options: Options(
+ 30 |         validateStatus: (status) => status == 200,
+ 31 |         responseType: ResponseType.json,
+ 32 |       ),
+ 33 |     );
+ 34 | 
+ 35 |     final data = response.data;
+ 36 |     if (data == null) throw Exception('empty release response');
+ 37 | 
+ 38 |     final tag = data['tag_name'] as String? ?? '';
+ 39 |     final body = data['body'] as String? ?? '';
+ 40 |     final remoteVersionCode = _extractVersionCode(tag, body);
+ 41 |     if (remoteVersionCode == null) {
+ 42 |       throw Exception('cannot parse versionCode from tag "$tag"');
+ 43 |     }
+ 44 | 
+ 45 |     final assets = (data['assets'] as List<dynamic>? ?? [])
+ 46 |         .cast<Map<String, dynamic>>();
+ 47 |     final asset = assets.firstWhere(
+ 48 |       (a) => a['name'] == _assetName,
+ 49 |       orElse: () => <String, dynamic>{},
+ 50 |     );
+
+============================================================
+第 46 页
+============================================================
+
+  1 |     final downloadUrl = asset['browser_download_url'] as String?;
+  2 |     if (downloadUrl == null || downloadUrl.isEmpty) {
+  3 |       throw Exception('$_assetName not found in release assets');
+  4 |     }
+  5 | 
+  6 |     final localVersionCode = int.tryParse(_packageInfo.buildNumber) ?? 0;
+  7 |     if (remoteVersionCode <= localVersionCode) return null;
+  8 | 
+  9 |     return UpdateInfo(
+ 10 |       versionCode: remoteVersionCode,
+ 11 |       versionName: tag.replaceFirst(RegExp(r'^v'), '').replaceFirst(RegExp(r'\+\d+\s*$'), ''),
+ 12 |       downloadUrl: downloadUrl,
+ 13 |       releaseNotes: body,
+ 14 |     );
+ 15 |   }
+ 16 | 
+ 17 |   /// Extracts the Android version code from the release tag or body.
+ 18 |   ///
+ 19 |   /// Preferred format: tag ending with `+NNN` (e.g. `v0.8.0+14`).
+ 20 |   /// Fallback: `versionCode: NNN` anywhere in the release body.
+ 21 |   int? _extractVersionCode(String tag, String body) {
+ 22 |     final tagMatch = RegExp(r'\+(\d+)\s*$').firstMatch(tag);
+ 23 |     if (tagMatch != null) return int.tryParse(tagMatch.group(1)!);
+ 24 | 
+ 25 |     final bodyMatch =
+ 26 |         RegExp(r'[Vv]ersionCode[:\s]*(\d+)').firstMatch(body);
+ 27 |     if (bodyMatch != null) return int.tryParse(bodyMatch.group(1)!);
+ 28 | 
+ 29 |     return null;
+ 30 |   }
+ 31 | 
+ 32 |   Future<void> _markChecked(DateTime now) async {
+ 33 |     await _prefs.setInt(_lastCheckKey, now.millisecondsSinceEpoch);
+ 34 |   }
+ 35 | }
+ 36 | 
+ 37 | // ===== FILE: lib/services/connectivity_service.dart (26 lines) =====
+ 38 | import 'package:connectivity_plus/connectivity_plus.dart';
+ 39 | 
+ 40 | /// Wrapper around `connectivity_plus` that exposes only the Wi-Fi check
+ 41 | /// needed by the update feature.
+ 42 | ///
+ 43 | /// The abstraction makes it possible to inject a fake in unit tests without
+ 44 | /// touching the plugin's MethodChannel.
+ 45 | class ConnectivityService {
+ 46 |   final Future<List<ConnectivityResult>> Function() _check;
+ 47 | 
+ 48 |   /// Creates a [ConnectivityService].
+ 49 |   ///
+ 50 |   /// The optional [check] parameter is used in tests to override the real
+
+============================================================
+第 47 页
+============================================================
+
+  1 |   /// plugin call.
+  2 |   ConnectivityService({Future<List<ConnectivityResult>> Function()? check})
+  3 |       : _check = check ?? (() => Connectivity().checkConnectivity());
+  4 | 
+  5 |   /// Returns true if the device is currently connected to a Wi-Fi network.
+  6 |   ///
+  7 |   /// Mobile data, VPN-only, or disconnected states all return false so the
+  8 |   /// update check does not consume cellular bandwidth.
+  9 |   Future<bool> get isWifiConnected async {
+ 10 |     final results = await _check();
+ 11 |     return results.contains(ConnectivityResult.wifi);
+ 12 |   }
+ 13 | }
+ 14 | 
+ 15 | // ===== FILE: lib/services/download_service.dart (43 lines) =====
+ 16 | import 'dart:io';
+ 17 | 
+ 18 | import 'package:dio/dio.dart';
+ 19 | 
+ 20 | /// Downloads the APK from a remote URL to a local file.
+ 21 | class DownloadService {
+ 22 |   final Dio _dio;
+ 23 | 
+ 24 |   /// Creates a [DownloadService].
+ 25 |   ///
+ 26 |   /// The optional [dio] parameter is used in tests.
+ 27 |   DownloadService({Dio? dio}) : _dio = dio ?? Dio();
+ 28 | 
+ 29 |   /// Downloads the file at [url] to [savePath].
+ 30 |   ///
+ 31 |   /// The optional [onProgress] callback receives a value between 0.0 and 1.0
+ 32 |   /// whenever the download makes progress. Callers can ignore it or use it
+ 33 |   /// to drive accessibility announcements.
+ 34 |   ///
+ 35 |   /// Throws [DioException] on network errors.
+ 36 |   Future<String> downloadApk(
+ 37 |     String url,
+ 38 |     String savePath, {
+ 39 |     void Function(double progress)? onProgress,
+ 40 |   }) async {
+ 41 |     final file = File(savePath);
+ 42 |     if (file.existsSync()) {
+ 43 |       file.deleteSync();
+ 44 |     }
+ 45 | 
+ 46 |     await _dio.download(
+ 47 |       url,
+ 48 |       savePath,
+ 49 |       onReceiveProgress: (received, total) {
+ 50 |         if (total > 0 && onProgress != null) {
+
+============================================================
+第 48 页
+============================================================
+
+  1 |           onProgress(received / total);
+  2 |         }
+  3 |       },
+  4 |     );
+  5 | 
+  6 |     return savePath;
+  7 |   }
+  8 | }
+  9 | 
+ 10 | // ===== FILE: lib/services/install_service.dart (65 lines) =====
+ 11 | import 'dart:async';
+ 12 | 
+ 13 | import 'package:flutter/services.dart';
+ 14 | 
+ 15 | /// Result of an APK install attempt.
+ 16 | class InstallResult {
+ 17 |   /// Creates an [InstallResult].
+ 18 |   const InstallResult({required this.success, this.error});
+ 19 | 
+ 20 |   /// True when the system installer was successfully launched.
+ 21 |   final bool success;
+ 22 | 
+ 23 |   /// Error code or message when [success] is false.
+ 24 |   ///
+ 25 |   /// Common values:
+ 26 |   /// - `permission_denied` — the app cannot request package installs.
+ 27 |   /// - `file_not_found` — the downloaded APK does not exist.
+ 28 |   /// - Other platform-specific messages.
+ 29 |   final String? error;
+ 30 | 
+ 31 |   /// Parses the Map returned by the native installer channel.
+ 32 |   factory InstallResult.fromMap(Map<dynamic, dynamic>? map) {
+ 33 |     if (map == null) {
+ 34 |       return const InstallResult(success: false, error: 'empty_response');
+ 35 |     }
+ 36 |     return InstallResult(
+ 37 |       success: map['success'] as bool? ?? false,
+ 38 |       error: map['error'] as String?,
+ 39 |     );
+ 40 |   }
+ 41 | }
+ 42 | 
+ 43 | /// Handles APK install permission and launches the system installer.
+ 44 | class InstallService {
+ 45 |   static const _channel = MethodChannel('com.smart_eye/installer');
+ 46 | 
+ 47 |   /// Returns whether the app is allowed to request package installs.
+ 48 |   ///
+ 49 |   /// On Android 8.0+ this reflects the `REQUEST_INSTALL_PACKAGES` setting;
+ 50 |   /// older versions return true.
+
+============================================================
+第 49 页
+============================================================
+
+  1 |   Future<bool> canInstall() async {
+  2 |     final ok = await _channel.invokeMethod<bool>('canRequestPackageInstalls');
+  3 |     return ok ?? false;
+  4 |   }
+  5 | 
+  6 |   /// Opens the system screen where the user can allow installs from this app.
+  7 |   ///
+  8 |   /// Returns true if the settings screen was launched.
+  9 |   Future<bool> openInstallSettings() async {
+ 10 |     final ok = await _channel.invokeMethod<bool>('openInstallSettings');
+ 11 |     return ok ?? false;
+ 12 |   }
+ 13 | 
+ 14 |   /// Launches the system installer for the APK at [path].
+ 15 |   ///
+ 16 |   /// The caller must ensure [canInstall] returns true before calling this
+ 17 |   /// method, otherwise the result will report `permission_denied`.
+ 18 |   Future<InstallResult> installApk(String path) async {
+ 19 |     final map = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+ 20 |       'installApk',
+ 21 |       {'path': path},
+ 22 |     );
+ 23 |     return InstallResult.fromMap(map);
+ 24 |   }
+ 25 | }
+ 26 | 
+ 27 | // ===== FILE: lib/models/meal_code.dart (43 lines) =====
+ 28 | /// Represents a recognized meal code with timestamp and platform.
+ 29 | class MealCode {
+ 30 |   final String code;
+ 31 |   final DateTime recognizedAt;
+ 32 |   final String? platform;
+ 33 | 
+ 34 |   const MealCode({
+ 35 |     required this.code,
+ 36 |     required this.recognizedAt,
+ 37 |     this.platform,
+ 38 |   });
+ 39 | 
+ 40 |   /// Serializes to a pipe-delimited string for storage.
+ 41 |   /// Format: `code|timestamp|platform` (platform optional, backward compatible).
+ 42 |   String toStorageString() {
+ 43 |     final plat = platform ?? '';
+ 44 |     return '$code|${recognizedAt.millisecondsSinceEpoch}|$plat';
+ 45 |   }
+ 46 | 
+ 47 |   /// Deserializes from a pipe-delimited string.
+ 48 |   /// Supports both old format (`code|timestamp`) and new format (`code|timestamp|platform`).
+ 49 |   static MealCode? fromStorageString(String value) {
+ 50 |     final parts = value.split('|');
+
+============================================================
+第 50 页
+============================================================
+
+  1 |     if (parts.length < 2) return null;
+  2 |     final timestamp = int.tryParse(parts[1]);
+  3 |     if (timestamp == null) return null;
+  4 |     final platform = parts.length >= 3 && parts[2].isNotEmpty ? parts[2] : null;
+  5 |     return MealCode(
+  6 |       code: parts[0],
+  7 |       recognizedAt: DateTime.fromMillisecondsSinceEpoch(timestamp),
+  8 |       platform: platform,
+  9 |     );
+ 10 |   }
+ 11 | 
+ 12 |   /// Returns a human-readable time description.
+ 13 |   String get timeDescription {
+ 14 |     final now = DateTime.now();
+ 15 |     final diff = now.difference(recognizedAt);
+ 16 |     if (diff.inMinutes < 1) return '刚刚';
+ 17 |     if (diff.inMinutes < 60) return '${diff.inMinutes} 分钟前';
+ 18 |     return '${diff.inHours} 小时前';
+ 19 |   }
+ 20 | }
+ 21 | 
+ 22 | // ===== FILE: lib/models/scan_result.dart (90 lines) =====
+ 23 | import 'dart:ui';
+ 24 | 
+ 25 | /// Represents a single detected meal code with its platform and screen position.
+ 26 | class ScanResult {
+ 27 |   /// The meal code, e.g. "#65".
+ 28 |   final String code;
+ 29 | 
+ 30 |   /// Platform display name, e.g. "美团外卖". Null if unknown.
+ 31 |   final String? platform;
+ 32 | 
+ 33 |   /// Human-readable position label, e.g. "左上", "右下", "中间".
+ 34 |   final String positionLabel;
+ 35 | 
+ 36 |   /// Bounding box center in image coordinates (for sorting).
+ 37 |   final Offset center;
+ 38 | 
+ 39 |   ScanResult({
+ 40 |     required this.code,
+ 41 |     this.platform,
+ 42 |     required this.positionLabel,
+ 43 |     required this.center,
+ 44 |   });
+ 45 | 
+ 46 |   @override
+ 47 |   String toString() =>
+ 48 |       'ScanResult(code=$code, platform=$platform, pos=$positionLabel)';
+ 49 | }
+ 50 | 
+
+============================================================
+第 51 页
+============================================================
+
+  1 | /// Computes a position label from a point relative to the overall text extent.
+  2 | ///
+  3 | /// Divides the text area into a 3×3 grid and returns the Chinese label
+  4 | /// for the zone the point falls in.
+  5 | String computePositionLabel(Offset point, Rect textBounds) {
+  6 |   if (textBounds.isEmpty) return '中间';
+  7 | 
+  8 |   final xRatio = (point.dx - textBounds.left) / textBounds.width;
+  9 |   final yRatio = (point.dy - textBounds.top) / textBounds.height;
+ 10 | 
+ 11 |   String xLabel;
+ 12 |   if (xRatio < 0.33) {
+ 13 |     xLabel = '左';
+ 14 |   } else if (xRatio > 0.66) {
+ 15 |     xLabel = '右';
+ 16 |   } else {
+ 17 |     xLabel = '';
+ 18 |   }
+ 19 | 
+ 20 |   String yLabel;
+ 21 |   if (yRatio < 0.33) {
+ 22 |     yLabel = '上';
+ 23 |   } else if (yRatio > 0.66) {
+ 24 |     yLabel = '下';
+ 25 |   } else {
+ 26 |     yLabel = '';
+ 27 |   }
+ 28 | 
+ 29 |   final combined = '$xLabel$yLabel';
+ 30 |   if (combined.isEmpty) return '中间';
+ 31 |   if (combined == '左' || combined == '右') return '$combined侧';
+ 32 |   if (combined == '上') return '上方';
+ 33 |   if (combined == '下') return '下方';
+ 34 |   return combined; // 左上, 右上, 左下, 右下
+ 35 | }
+ 36 | 
+ 37 | /// Maps a position label to its audio asset path.
+ 38 | String? positionAudioAsset(String? label) {
+ 39 |   if (label == null) return null;
+ 40 |   switch (label) {
+ 41 |     case '左上':
+ 42 |       return 'assets/audio/pos_topleft.mp3';
+ 43 |     case '右上':
+ 44 |       return 'assets/audio/pos_topright.mp3';
+ 45 |     case '左下':
+ 46 |       return 'assets/audio/pos_bottomleft.mp3';
+ 47 |     case '右下':
+ 48 |       return 'assets/audio/pos_bottomright.mp3';
+ 49 |     case '上方':
+ 50 |       return 'assets/audio/pos_top.mp3';
+
+============================================================
+第 52 页
+============================================================
+
+  1 |     case '下方':
+  2 |       return 'assets/audio/pos_bottom.mp3';
+  3 |     case '中间':
+  4 |       return 'assets/audio/pos_center.mp3';
+  5 |     case '左侧':
+  6 |       return 'assets/audio/pos_left.mp3';
+  7 |     case '右侧':
+  8 |       return 'assets/audio/pos_right.mp3';
+  9 |     default:
+ 10 |       return null;
+ 11 |   }
+ 12 | }
+ 13 | 
+ 14 | // ===== FILE: android/app/src/main/kotlin/com/example/smart_eye/MainActivity.kt (435 lines) =====
+ 15 | package com.example.smart_eye
+ 16 | 
+ 17 | import android.Manifest
+ 18 | import android.content.Context
+ 19 | import android.content.Intent
+ 20 | import android.content.SharedPreferences
+ 21 | import android.content.pm.PackageManager
+ 22 | import android.content.res.AssetFileDescriptor
+ 23 | import android.media.AudioAttributes
+ 24 | import android.media.MediaPlayer
+ 25 | import android.net.Uri
+ 26 | import android.os.Build
+ 27 | import android.os.Handler
+ 28 | import android.os.Looper
+ 29 | import android.provider.Settings
+ 30 | import androidx.core.app.ActivityCompat
+ 31 | import androidx.core.content.ContextCompat
+ 32 | import androidx.core.content.FileProvider
+ 33 | import io.flutter.embedding.android.FlutterActivity
+ 34 | import io.flutter.embedding.engine.FlutterEngine
+ 35 | import io.flutter.plugin.common.MethodChannel
+ 36 | import java.io.File
+ 37 | import java.util.concurrent.atomic.AtomicBoolean
+ 38 | 
+ 39 | /**
+ 40 |  * MainActivity exposes three MethodChannels:
+ 41 |  *  - `com.smart_eye/audio` — plays bundled audio assets (see ADR-001).
+ 42 |  *  - `com.smart_eye/permission` — handles camera permission checks,
+ 43 |  *    runtime requests, and opening the app's settings page.
+ 44 |  *  - `com.smart_eye/installer` — handles APK install permission and
+ 45 |  *    launching the system package installer for in-app updates.
+ 46 |  *
+ 47 |  * The voice strategy is pre-recorded audio rather than the system TTS
+ 48 |  * engine, because OPPO/ColorOS devices make the TTS engine visible in
+ 49 |  * Settings but un-bindable by third-party Flutter apps.
+ 50 |  */
+
+============================================================
+第 53 页
+============================================================
+
+  1 | class MainActivity : FlutterActivity() {
+  2 |     private val channelName = "com.smart_eye/audio"
+  3 |     private val permissionChannelName = "com.smart_eye/permission"
+  4 |     private val installerChannelName = "com.smart_eye/installer"
+  5 |     private val cameraPermissionRequestCode = 4242
+  6 |     private val permissionPrefsKey = "com.smart_eye.permission_prefs"
+  7 |     private val cameraRequestedKey = "camera_permission_has_been_requested"
+  8 |     private val mainHandler = Handler(Looper.getMainLooper())
+  9 |     private val isPlaying = AtomicBoolean(false)
+ 10 |     private lateinit var methodChannel: MethodChannel
+ 11 |     private lateinit var permissionChannel: MethodChannel
+ 12 |     private lateinit var installerChannel: MethodChannel
+ 13 |     private lateinit var prefs: SharedPreferences
+ 14 | 
+ 15 |     /// Pending result for the camera permission request, if the user is
+ 16 |     /// currently being prompted. Set in [requestCameraPermission] and
+ 17 |     /// resolved in [onRequestPermissionsResult].
+ 18 |     private var pendingCameraResult: MethodChannel.Result? = null
+ 19 | 
+ 20 |     /// Reference to the currently active MediaPlayer, so stop() can truly halt
+ 21 |     /// playback instead of just flipping a flag.
+ 22 |     @Volatile
+ 23 |     private var currentPlayer: MediaPlayer? = null
+ 24 | 
+ 25 |     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+ 26 |         super.configureFlutterEngine(flutterEngine)
+ 27 |         prefs = getSharedPreferences(permissionPrefsKey, Context.MODE_PRIVATE)
+ 28 | 
+ 29 |         methodChannel = MethodChannel(
+ 30 |             flutterEngine.dartExecutor.binaryMessenger,
+ 31 |             channelName
+ 32 |         )
+ 33 |         methodChannel.setMethodCallHandler { call, result ->
+ 34 |             when (call.method) {
+ 35 |                 "ping" -> {
+ 36 |                     result.success(true)
+ 37 |                 }
+ 38 |                 "playAssets" -> {
+ 39 |                     val paths = call.argument<List<String>>("paths") ?: emptyList()
+ 40 |                     val volume = (call.argument<Number>("volume")?.toFloat() ?: 1.0f)
+ 41 |                         .coerceIn(0.0f, 1.0f)
+ 42 |                     playAssets(paths, volume, result)
+ 43 |                 }
+ 44 |                 "stop" -> {
+ 45 |                     stopPlayback()
+ 46 |                     result.success(true)
+ 47 |                 }
+ 48 |                 "isPlaying" -> {
+ 49 |                     result.success(isPlaying.get())
+ 50 |                 }
+
+============================================================
+第 54 页
+============================================================
+
+  1 |                 else -> result.notImplemented()
+  2 |             }
+  3 |         }
+  4 | 
+  5 |         // Permission channel — added in v0.7.1 to fix the silent startup
+  6 |         // failure when the user has not granted camera access.
+  7 |         permissionChannel = MethodChannel(
+  8 |             flutterEngine.dartExecutor.binaryMessenger,
+  9 |             permissionChannelName
+ 10 |         )
+ 11 |         permissionChannel.setMethodCallHandler { call, result ->
+ 12 |             when (call.method) {
+ 13 |                 "checkCamera" -> {
+ 14 |                     result.success(currentCameraPermissionStatus())
+ 15 |                 }
+ 16 |                 "requestCamera" -> {
+ 17 |                     requestCameraPermission(result)
+ 18 |                 }
+ 19 |                 "openAppSettings" -> {
+ 20 |                     result.success(openAppSettings())
+ 21 |                 }
+ 22 |                 else -> result.notImplemented()
+ 23 |             }
+ 24 |         }
+ 25 | 
+ 26 |         // Installer channel — added in v0.8.0 for in-app update.
+ 27 |         installerChannel = MethodChannel(
+ 28 |             flutterEngine.dartExecutor.binaryMessenger,
+ 29 |             installerChannelName
+ 30 |         )
+ 31 |         installerChannel.setMethodCallHandler { call, result ->
+ 32 |             when (call.method) {
+ 33 |                 "canRequestPackageInstalls" -> {
+ 34 |                     result.success(canRequestPackageInstalls())
+ 35 |                 }
+ 36 |                 "openInstallSettings" -> {
+ 37 |                     result.success(openInstallSettings())
+ 38 |                 }
+ 39 |                 "installApk" -> {
+ 40 |                     val path = call.argument<String>("path") ?: ""
+ 41 |                     installApk(path, result)
+ 42 |                 }
+ 43 |                 else -> result.notImplemented()
+ 44 |             }
+ 45 |         }
+ 46 |     }
+ 47 | 
+ 48 |     /**
+ 49 |      * Plays a list of asset audio files sequentially.
+ 50 |      *
+
+============================================================
+第 55 页
+============================================================
+
+  1 |      * Each path is relative to the Flutter assets root, e.g. "assets/audio/num_1.mp3".
+  2 |      * The [result] is returned immediately with success=true; completion is not awaited.
+  3 |      */
+  4 |     private fun playAssets(paths: List<String>, volume: Float, result: MethodChannel.Result) {
+  5 |         if (paths.isEmpty()) {
+  6 |             result.success(true)
+  7 |             return
+  8 |         }
+  9 | 
+ 10 |         mainHandler.post {
+ 11 |             stopPlayback()
+ 12 |             isPlaying.set(true)
+ 13 |             playNext(paths, 0, volume)
+ 14 |             result.success(true)
+ 15 |         }
+ 16 |     }
+ 17 | 
+ 18 |     private fun playNext(paths: List<String>, index: Int, volume: Float) {
+ 19 |         if (index >= paths.size) {
+ 20 |             isPlaying.set(false)
+ 21 |             currentPlayer = null
+ 22 |             // Notify Dart side that all clips have finished playing.
+ 23 |             methodChannel.invokeMethod("onPlaybackComplete", null)
+ 24 |             return
+ 25 |         }
+ 26 | 
+ 27 |         val path = paths[index]
+ 28 |         val player = MediaPlayer()
+ 29 |         var afd: AssetFileDescriptor? = null
+ 30 | 
+ 31 |         try {
+ 32 |             // Flutter assets are packaged under assets/flutter_assets/ in the APK.
+ 33 |             // The Dart side sends the asset key (e.g. "assets/audio/num_1.mp3"),
+ 34 |             // so we need to prepend the flutter_assets prefix for AssetManager.
+ 35 |             afd = assets.openFd("flutter_assets/$path")
+ 36 |             player.setAudioAttributes(
+ 37 |                 AudioAttributes.Builder()
+ 38 |                     .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+ 39 |                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+ 40 |                     .build()
+ 41 |             )
+ 42 |             player.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+ 43 |             player.setVolume(volume, volume)
+ 44 |             // Play at 2.0x speed for faster voice feedback.
+ 45 |             player.playbackParams = player.playbackParams.apply {
+ 46 |                 speed = 2.0f
+ 47 |             }
+ 48 |             player.setOnCompletionListener {
+ 49 |                 it.release()
+ 50 |                 afd?.close()
+
+============================================================
+第 56 页
+============================================================
+
+  1 |                 // Clear reference before advancing to next clip.
+  2 |                 if (currentPlayer === it) {
+  3 |                     currentPlayer = null
+  4 |                 }
+  5 |                 playNext(paths, index + 1, volume)
+  6 |             }
+  7 |             player.setOnErrorListener { mp, what, extra ->
+  8 |                 android.util.Log.e("SmartEye", "MediaPlayer error: what=$what extra=$extra for $path")
+  9 |                 mp.release()
+ 10 |                 afd?.close()
+ 11 |                 if (currentPlayer === mp) {
+ 12 |                     currentPlayer = null
+ 13 |                 }
+ 14 |                 // Try to continue with the next clip.
+ 15 |                 playNext(paths, index + 1, volume)
+ 16 |                 true
+ 17 |             }
+ 18 |             player.prepare()
+ 19 |             // Track the active player so stop() can truly halt it.
+ 20 |             currentPlayer = player
+ 21 |             player.start()
+ 22 |         } catch (e: Exception) {
+ 23 |             android.util.Log.e("SmartEye", "Failed to play asset $path: ${e.message}")
+ 24 |             afd?.close()
+ 25 |             player.release()
+ 26 |             if (currentPlayer === player) {
+ 27 |                 currentPlayer = null
+ 28 |             }
+ 29 |             playNext(paths, index + 1, volume)
+ 30 |         }
+ 31 |     }
+ 32 | 
+ 33 |     /// Truly stops and releases the active MediaPlayer.
+ 34 |     /// Previous implementation only flipped a flag, which caused audio overlap
+ 35 |     /// when a new speak() call started before the old clip finished.
+ 36 |     private fun stopPlayback() {
+ 37 |         isPlaying.set(false)
+ 38 |         currentPlayer?.let { p ->
+ 39 |             try {
+ 40 |                 if (p.isPlaying) {
+ 41 |                     p.stop()
+ 42 |                 }
+ 43 |                 p.release()
+ 44 |             } catch (e: Exception) {
+ 45 |                 android.util.Log.e("SmartEye", "stopPlayback error: ${e.message}")
+ 46 |             }
+ 47 |             currentPlayer = null
+ 48 |         }
+ 49 |     }
+ 50 | 
+
+============================================================
+第 57 页
+============================================================
+
+  1 |     override fun onDestroy() {
+  2 |         stopPlayback()
+  3 |         super.onDestroy()
+  4 |     }
+  5 | 
+  6 |     // ============================================================
+  7 |     // Camera permission handling (v0.7.1)
+  8 |     // ============================================================
+  9 | 
+ 10 |     /**
+ 11 |      * Returns the current camera permission status as a string compatible
+ 12 |      * with the Dart-side [PermissionStatus] enum.
+ 13 |      *
+ 14 |      * Values: "granted", "denied", "permanently_denied".
+ 15 |      *
+ 16 |      * The "permanently denied" case requires two conditions to both hold:
+ 17 |      * 1. The runtime check returns PERMISSION_DENIED.
+ 18 |      * 2. We have previously asked the user for the permission at least
+ 19 |      *    once (tracked in SharedPreferences), AND
+ 20 |      *    `shouldShowRequestPermissionRationale` returns false.
+ 21 |      *
+ 22 |      * On a fresh install, before we have ever asked the user,
+ 23 |      * `shouldShowRequestPermissionRationale` also returns false. Without
+ 24 |      * the persistent "has been requested" flag we would incorrectly
+ 25 |      * classify every first launch as permanently denied and jump straight
+ 26 |      * to the system settings page without ever showing the system
+ 27 |      * permission dialog.
+ 28 |      */
+ 29 |     private fun currentCameraPermissionStatus(): String {
+ 30 |         val granted = ContextCompat.checkSelfPermission(
+ 31 |             this, Manifest.permission.CAMERA
+ 32 |         ) == PackageManager.PERMISSION_GRANTED
+ 33 |         if (granted) return "granted"
+ 34 | 
+ 35 |         val hasRequestedBefore = prefs.getBoolean(cameraRequestedKey, false)
+ 36 |         if (!hasRequestedBefore) {
+ 37 |             // Never asked the user yet — the system dialog can still be shown.
+ 38 |             return "denied"
+ 39 |         }
+ 40 | 
+ 41 |         val rationale = ActivityCompat.shouldShowRequestPermissionRationale(
+ 42 |             this, Manifest.permission.CAMERA
+ 43 |         )
+ 44 |         // If rationale is false AND we have asked before, the user selected
+ 45 |         // "Don't ask again". The system dialog will not appear; the only
+ 46 |         // recovery path is the settings page.
+ 47 |         return if (rationale) "denied" else "permanently_denied"
+ 48 |     }
+ 49 | 
+ 50 |     /**
+
+============================================================
+第 58 页
+============================================================
+
+  1 |      * Triggers the system permission dialog for the camera.
+  2 |      *
+  3 |      * If the dialog cannot be shown (e.g. permanently denied), the
+  4 |      * result is returned synchronously. Otherwise, [pendingCameraResult]
+  5 |      * is held and the final result is delivered in
+  6 |      * [onRequestPermissionsResult].
+  7 |      */
+  8 |     private fun requestCameraPermission(result: MethodChannel.Result) {
+  9 |         val granted = ContextCompat.checkSelfPermission(
+ 10 |             this, Manifest.permission.CAMERA
+ 11 |         ) == PackageManager.PERMISSION_GRANTED
+ 12 |         if (granted) {
+ 13 |             result.success("granted")
+ 14 |             return
+ 15 |         }
+ 16 | 
+ 17 |         if (pendingCameraResult != null) {
+ 18 |             // A request is already in flight; tell Dart to wait rather
+ 19 |             // than than firing a second dialog and losing track of the
+ 20 |             // first result.
+ 21 |             result.success("denied")
+ 22 |             return
+ 23 |         }
+ 24 | 
+ 25 |         // Record that we have asked the user at least once, so future
+ 26 |         // checks can distinguish "never asked" from "permanently denied".
+ 27 |         prefs.edit().putBoolean(cameraRequestedKey, true).apply()
+ 28 | 
+ 29 |         pendingCameraResult = result
+ 30 |         ActivityCompat.requestPermissions(
+ 31 |             this,
+ 32 |             arrayOf(Manifest.permission.CAMERA),
+ 33 |             cameraPermissionRequestCode
+ 34 |         )
+ 35 |     }
+ 36 | 
+ 37 |     /**
+ 38 |      * Opens the app's settings page so the user can manually grant the
+ 39 |      * camera permission.
+ 40 |      *
+ 41 |      * Returns true if the settings activity was launched; false if the
+ 42 |      * platform refused to start it.
+ 43 |      */
+ 44 |     private fun openAppSettings(): Boolean {
+ 45 |         return try {
+ 46 |             val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+ 47 |             intent.data = Uri.fromParts("package", packageName, null)
+ 48 |             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+ 49 |             startActivity(intent)
+ 50 |             true
+
+============================================================
+第 59 页
+============================================================
+
+  1 |         } catch (e: Exception) {
+  2 |             android.util.Log.e("SmartEye", "openAppSettings failed: ${e.message}")
+  3 |             false
+  4 |         }
+  5 |     }
+  6 | 
+  7 |     override fun onRequestPermissionsResult(
+  8 |         requestCode: Int,
+  9 |         permissions: Array<out String>,
+ 10 |         grantResults: IntArray
+ 11 |     ) {
+ 12 |         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+ 13 |         if (requestCode != cameraPermissionRequestCode) return
+ 14 | 
+ 15 |         val pending = pendingCameraResult ?: return
+ 16 |         pendingCameraResult = null
+ 17 | 
+ 18 |         // Re-evaluate using the same logic as the synchronous check so
+ 19 |         // the Dart side sees a consistent state.
+ 20 |         pending.success(currentCameraPermissionStatus())
+ 21 |     }
+ 22 | 
+ 23 |     // ============================================================
+ 24 |     // APK installer handling (v0.8.0)
+ 25 |     // ============================================================
+ 26 | 
+ 27 |     /**
+ 28 |      * Returns whether the app is allowed to request package installs.
+ 29 |      *
+ 30 |      * On Android 8.0+ this checks [PackageManager.canRequestPackageInstalls].
+ 31 |      * On older versions we assume true because there is no equivalent API.
+ 32 |      */
+ 33 |     private fun canRequestPackageInstalls(): Boolean {
+ 34 |         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+ 35 |             packageManager.canRequestPackageInstalls()
+ 36 |         } else {
+ 37 |             true
+ 38 |         }
+ 39 |     }
+ 40 | 
+ 41 |     /**
+ 42 |      * Opens the system screen where the user can allow installs from this app.
+ 43 |      *
+ 44 |      * This is required on Android 8.0+ when [canRequestPackageInstalls] returns
+ 45 |      * false. The user must toggle the setting and return to the app.
+ 46 |      */
+ 47 |     private fun openInstallSettings(): Boolean {
+ 48 |         return try {
+ 49 |             val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+ 50 |                 data = Uri.parse("package:$packageName")
+
+============================================================
+第 60 页
+============================================================
+
+  1 |                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+  2 |             }
+  3 |             startActivity(intent)
+  4 |             true
+  5 |         } catch (e: Exception) {
+  6 |             android.util.Log.e("SmartEye", "openInstallSettings failed: ${e.message}")
+  7 |             false
+  8 |         }
+  9 |     }
+ 10 | 
+ 11 |     /**
+ 12 |      * Launches the system package installer for the APK at [path].
+ 13 |      *
+ 14 |      * The file is exposed through a [FileProvider] so the installer can read
+ 15 |      * it without requiring broad storage permissions. If the app does not yet
+ 16 |      * have install permission, the result reports "permission_denied" and the
+ 17 |      * caller should guide the user to [openInstallSettings].
+ 18 |      */
+ 19 |     private fun installApk(path: String, result: MethodChannel.Result) {
+ 20 |         if (!canRequestPackageInstalls()) {
+ 21 |             result.success(mapOf("success" to false, "error" to "permission_denied"))
+ 22 |             return
+ 23 |         }
+ 24 | 
+ 25 |         val file = File(path)
+ 26 |         if (!file.exists()) {
+ 27 |             result.success(mapOf("success" to false, "error" to "file_not_found"))
+ 28 |             return
+ 29 |         }
+ 30 | 
+ 31 |         try {
+ 32 |             val uri = FileProvider.getUriForFile(
+ 33 |                 this,
+ 34 |                 "$packageName.fileprovider",
+ 35 |                 file
+ 36 |             )
+ 37 |             val intent = Intent(Intent.ACTION_VIEW).apply {
+ 38 |                 setDataAndType(uri, "application/vnd.android.package-archive")
+ 39 |                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+ 40 |                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+ 41 |             }
+ 42 |             startActivity(intent)
+ 43 |             result.success(mapOf("success" to true))
+ 44 |         } catch (e: Exception) {
+ 45 |             android.util.Log.e("SmartEye", "installApk failed: ${e.message}")
+ 46 |             result.success(mapOf("success" to false, "error" to (e.message ?: "unknown")))
+ 47 |         }
+ 48 |     }
+ 49 | }
+ 50 | 

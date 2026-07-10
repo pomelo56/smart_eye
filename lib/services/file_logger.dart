@@ -26,6 +26,11 @@ class FileLogger {
   /// Maximum number of lines shown on the screen overlay.
   static const maxScreenLines = 8;
 
+  /// Optional external (app-specific) log file for field diagnostics.
+  /// On Android this lives under /sdcard/Android/data/<package>/files/
+  /// and can be pulled via adb without run-as.
+  File? _externalLogFile;
+
   /// Notifies listeners when [screenBuffer] changes.
   ///
   /// Widgets can listen to this instead of rebuilding on every log write
@@ -41,6 +46,27 @@ class FileLogger {
       _logDir = dir.path;
       await _rotateIfNeeded();
       _logFile = await _createLogFile();
+
+      // Also write to an app-specific external file so diagnostics can be
+      // pulled via adb on release builds (run-as is not available).
+      try {
+        final extDir = await getExternalStorageDirectory();
+        if (extDir != null) {
+          final extLogDir = Directory('${extDir.path}/logs');
+          if (!await extLogDir.exists()) {
+            await extLogDir.create(recursive: true);
+          }
+          final now = DateTime.now();
+          final dateStr =
+              '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+          final timeStr =
+              '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+          _externalLogFile = File('${extLogDir.path}/smarteye_${dateStr}_$timeStr.log');
+        }
+      } catch (e) {
+        debugPrint('[FileLogger] 外部日志初始化失败: $e');
+      }
+
       _initialized = true;
       await write('INFO', 'FileLogger 初始化完成, dir=$_logDir');
     } catch (e) {
@@ -110,6 +136,15 @@ class FileLogger {
         await _logFile!.writeAsString('$line\n', mode: FileMode.append);
       } catch (e) {
         debugPrint('[FileLogger] 写入失败: $e');
+      }
+    }
+
+    // External log copy for adb diagnostics on release builds.
+    if (_externalLogFile != null) {
+      try {
+        await _externalLogFile!.writeAsString('$line\n', mode: FileMode.append);
+      } catch (e) {
+        debugPrint('[FileLogger] 外部日志写入失败: $e');
       }
     }
   }

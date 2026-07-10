@@ -3,7 +3,6 @@ package com.example.smart_eye
 import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.res.AssetFileDescriptor
 import android.media.AudioAttributes
@@ -39,14 +38,22 @@ class MainActivity : FlutterActivity() {
     private val permissionChannelName = "com.smart_eye/permission"
     private val installerChannelName = "com.smart_eye/installer"
     private val cameraPermissionRequestCode = 4242
-    private val permissionPrefsKey = "com.smart_eye.permission_prefs"
-    private val cameraRequestedKey = "camera_permission_has_been_requested"
+
+    /// File in [Context.getNoBackupFilesDir] that records whether we have
+    /// ever asked the user for camera permission. We intentionally avoid
+    /// SharedPreferences / allowBackup so that uninstalling the app always
+    /// resets this flag. Otherwise Android/Google/ColorOS backup can restore
+    /// the old flag on a fresh install and make the first launch look like
+    /// a permanent denial.
+    private val cameraRequestedFlagFile by lazy {
+        File(noBackupFilesDir, "camera_permission_requested")
+    }
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private val isPlaying = AtomicBoolean(false)
     private lateinit var methodChannel: MethodChannel
     private lateinit var permissionChannel: MethodChannel
     private lateinit var installerChannel: MethodChannel
-    private lateinit var prefs: SharedPreferences
 
     /// Pending result for the camera permission request, if the user is
     /// currently being prompted. Set in [requestCameraPermission] and
@@ -60,7 +67,6 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        prefs = getSharedPreferences(permissionPrefsKey, Context.MODE_PRIVATE)
 
         methodChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -252,7 +258,7 @@ class MainActivity : FlutterActivity() {
      * The "permanently denied" case requires two conditions to both hold:
      * 1. The runtime check returns PERMISSION_DENIED.
      * 2. We have previously asked the user for the permission at least
-     *    once (tracked in SharedPreferences), AND
+     *    once (tracked in [cameraRequestedFlagFile]), AND
      *    `shouldShowRequestPermissionRationale` returns false.
      *
      * On a fresh install, before we have ever asked the user,
@@ -261,6 +267,12 @@ class MainActivity : FlutterActivity() {
      * classify every first launch as permanently denied and jump straight
      * to the system settings page without ever showing the system
      * permission dialog.
+     *
+     * We store the flag in [Context.getNoBackupFilesDir] instead of
+     * SharedPreferences so that uninstalling the app always resets it.
+     * Some OEM backups (ColorOS, Google) restore SharedPreferences even
+     * when `allowBackup="false"` is set, which caused fresh installs to
+     * be misclassified as permanently denied.
      */
     private fun currentCameraPermissionStatus(): String {
         val granted = ContextCompat.checkSelfPermission(
@@ -268,7 +280,7 @@ class MainActivity : FlutterActivity() {
         ) == PackageManager.PERMISSION_GRANTED
         if (granted) return "granted"
 
-        val hasRequestedBefore = prefs.getBoolean(cameraRequestedKey, false)
+        val hasRequestedBefore = cameraRequestedFlagFile.exists()
         if (!hasRequestedBefore) {
             // Never asked the user yet — the system dialog can still be shown.
             return "denied"
@@ -310,7 +322,11 @@ class MainActivity : FlutterActivity() {
 
         // Record that we have asked the user at least once, so future
         // checks can distinguish "never asked" from "permanently denied".
-        prefs.edit().putBoolean(cameraRequestedKey, true).apply()
+        try {
+            cameraRequestedFlagFile.createNewFile()
+        } catch (e: Exception) {
+            android.util.Log.w("SmartEye", "无法创建权限请求标志文件", e)
+        }
 
         pendingCameraResult = result
         ActivityCompat.requestPermissions(
