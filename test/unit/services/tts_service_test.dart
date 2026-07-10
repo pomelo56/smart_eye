@@ -239,6 +239,22 @@ void main() {
           ]));
     });
 
+    test('maps Yonghui Supermarket platform name to yonghui clip', () async {
+      final audio = MockAudioService();
+      final service = TtsService(audioService: audio);
+      await service.initialize();
+      await service.speak('永辉超市 88 号');
+
+      expect(
+          audio.playedPaths,
+          equals([
+            'assets/audio/yonghui.mp3',
+            'assets/audio/num_8.mp3',
+            'assets/audio/num_8.mp3',
+            'assets/audio/hao.mp3',
+          ]));
+    });
+
     test('maps unknown platform without platform clip', () async {
       final audio = MockAudioService();
       final service = TtsService(audioService: audio);

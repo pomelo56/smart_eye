@@ -463,7 +463,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _ocrLogTimer = DateTime.now();
       }
 
-      final codes = _ocrService.extractMealCodes(combinedText);
+      var codes = _ocrService.extractMealCodes(combinedText);
+      // Fallback: some real-world OCR outputs split the `#` and digits or
+      // use a full-width `#`. Fuzzy extraction requires a nearby platform
+      // keyword to keep false positives low.
+      if (codes.isEmpty) {
+        codes = _ocrService.extractMealCodesFuzzy(combinedText);
+        if (codes.isNotEmpty) {
+          _log('OCR 模糊匹配到取餐码: $codes');
+        }
+      }
 
       if (codes.isEmpty) {
         // No codes found but text detected → distinguish "found the
@@ -509,7 +518,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
           // Pass 1: exact match (e.g. block contains "#18")
           for (final ob in allBlocks) {
-            if (ob.block.text.contains(code)) {
+            final normalizedBlock =
+                OcrService.normalizeHashSymbols(ob.block.text);
+            if (normalizedBlock.contains(code)) {
               codeBox = ob.transformedBox(uprightW, uprightH);
               blockText = ob.block.text;
               break;
@@ -520,8 +531,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (codeBox == null) {
             final digits = code.replaceFirst('#', '');
             for (final ob in allBlocks) {
-              if (ob.block.text.contains('#') &&
-                  ob.block.text.contains(digits)) {
+              final normalizedBlock =
+                  OcrService.normalizeHashSymbols(ob.block.text);
+              if (normalizedBlock.contains('#') &&
+                  normalizedBlock.contains(digits)) {
                 codeBox = ob.transformedBox(uprightW, uprightH);
                 blockText = ob.block.text;
                 break;
@@ -533,7 +546,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (codeBox == null) {
             final digits = code.replaceFirst('#', '');
             for (final ob in allBlocks) {
-              if (ob.block.text.contains(digits)) {
+              final normalizedBlock =
+                  OcrService.normalizeHashSymbols(ob.block.text);
+              if (normalizedBlock.contains(digits)) {
                 codeBox = ob.transformedBox(uprightW, uprightH);
                 blockText = ob.block.text;
                 break;
@@ -555,10 +570,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               '位置调试: code=$code center=(${center.dx.toInt()},${center.dy.toInt()}) '
               'upright=${uprightW.toInt()}x${uprightH.toInt()} '
               'rawImg=${imgW}x$imgH posLabel=$posLabel');
-          // Detect platform using ONLY the code's own block text,
-          // preventing cross-receipt misidentification.
-          final platform =
-              _ocrService.detectPlatform(blockText, nearCode: code);
+          // Detect platform using the code's own block text first, then fall
+          // back to the full frame context if the platform name ended up in a
+          // different OCR block. Context fallback uses a larger proximity
+          // window to avoid cross-receipt misidentification.
+          final platform = _ocrService.detectPlatform(
+            blockText,
+            nearCode: code,
+            contextText: combinedText,
+          );
 
           results.add(ScanResult(
             code: code,

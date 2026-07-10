@@ -57,6 +57,11 @@ void main() {
       final result = service.extractMealCodes('#AB and #12');
       expect(result, equals(['#12']));
     });
+
+    test('normalizes full-width hash to ASCII hash', () {
+      final service = OcrService();
+      expect(service.extractMealCodes('美团 ＃65'), equals(['#65']));
+    });
   });
 
   group('OcrService.selectBestCode', () {
@@ -117,6 +122,59 @@ void main() {
       final service = OcrService();
       const receipt = '淘宝闪购\n#9\n蜂鸟配送';
       expect(service.extractMealCodes(receipt), equals(['#9']));
+    });
+  });
+
+  group('OcrService.extractMealCodesFuzzy', () {
+    test('extracts code when hash and digits are separated by space', () {
+      final service = OcrService();
+      expect(service.extractMealCodesFuzzy('美团 # 3'), equals(['#3']));
+    });
+
+    test('extracts code with full-width hash', () {
+      final service = OcrService();
+      expect(service.extractMealCodesFuzzy('美团 ＃34'), equals(['#34']));
+    });
+
+    test('extracts code when platform and code are on different lines', () {
+      final service = OcrService();
+      expect(service.extractMealCodesFuzzy('美团外卖\n#65'), equals(['#65']));
+    });
+
+    test('extracts code when platform appears after the code', () {
+      final service = OcrService();
+      expect(service.extractMealCodesFuzzy('# 23 饿了么'), equals(['#23']));
+    });
+
+    test('extracts multiple fuzzy codes from same frame', () {
+      final service = OcrService();
+      const receipt = '美团 # 3\n饿了么 # 24';
+      expect(service.extractMealCodesFuzzy(receipt), equals(['#3', '#24']));
+    });
+
+    test('ignores code without platform keyword', () {
+      final service = OcrService();
+      expect(service.extractMealCodesFuzzy('订单 # 15'), isEmpty);
+    });
+
+    test('ignores long numbers', () {
+      final service = OcrService();
+      expect(service.extractMealCodesFuzzy('美团 #1234567'), isEmpty);
+    });
+
+    test('ignores prices with hash and decimal digits', () {
+      final service = OcrService();
+      expect(service.extractMealCodesFuzzy('美团 # 33.90'), isEmpty);
+    });
+
+    test('extracts Yonghui Supermarket code by short keyword', () {
+      final service = OcrService();
+      expect(service.extractMealCodesFuzzy('永辉 # 56'), equals(['#56']));
+    });
+
+    test('extracts Yonghui Supermarket code by full name', () {
+      final service = OcrService();
+      expect(service.extractMealCodesFuzzy('永辉超市 #102'), equals(['#102']));
     });
   });
 
@@ -238,6 +296,52 @@ void main() {
       expect(
         service.detectPlatform('京不外卖 #6'),
         equals('京东外卖'),
+      );
+    });
+  });
+
+  group('OcrService.detectPlatform (context fallback)', () {
+    test('detects platform from context when block text lacks keyword', () {
+      final service = OcrService();
+      expect(
+        service.detectPlatform('#34', nearCode: '#34', contextText: '美团 #34'),
+        equals('美团外卖'),
+      );
+    });
+
+    test('detects platform across lines via context text', () {
+      final service = OcrService();
+      expect(
+        service.detectPlatform(
+          '#65',
+          nearCode: '#65',
+          contextText: '美团外卖\n取餐码\n#65',
+        ),
+        equals('美团外卖'),
+      );
+    });
+
+    test('prefers block-level match over context match', () {
+      final service = OcrService();
+      expect(
+        service.detectPlatform(
+          '#65 美团外卖',
+          nearCode: '#65',
+          contextText: '饿了么 #65',
+        ),
+        equals('美团外卖'),
+      );
+    });
+
+    test('returns null when platform is too far in context', () {
+      final service = OcrService();
+      expect(
+        service.detectPlatform(
+          '#12',
+          nearCode: '#12',
+          contextText: '美团外卖\n${'\n' * 50}#12',
+        ),
+        isNull,
       );
     });
   });

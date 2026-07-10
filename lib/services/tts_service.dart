@@ -303,6 +303,8 @@ class TtsService {
         return 'assets/audio/taobao.mp3';
       case '朴朴超市':
         return 'assets/audio/pupu.mp3';
+      case '永辉超市':
+        return 'assets/audio/yonghui.mp3';
       default:
         return null;
     }
@@ -344,6 +346,7 @@ class TtsService {
         '京东外卖',
         '淘宝闪购',
         '朴朴超市',
+        '永辉超市',
       ]) {
         if (trimmed.contains(platform)) {
           final audio = _platformAudio(platform);
@@ -382,7 +385,8 @@ class TtsService {
     if (match2 != null) return match2.group(1);
 
     // Pattern 3: "平台名 数字" (no 号 suffix)
-    final match3 = RegExp(r'(?:美团外卖|美团闪购|饿了么|京东外卖|淘宝闪购|朴朴超市)\s*(\d{1,6})')
+    final match3 = RegExp(
+            r'(?:美团外卖|美团闪购|饿了么|京东外卖|淘宝闪购|朴朴超市|永辉超市)\s*(\d{1,6})')
         .firstMatch(text);
     if (match3 != null) return match3.group(1);
 
