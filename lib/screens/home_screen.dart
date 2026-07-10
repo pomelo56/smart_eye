@@ -139,6 +139,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       )),
     );
 
+    // In-app update check fires as soon as services are ready, independent
+    // of camera permission. A user who has permanently denied the camera
+    // (or hits the v0.8.0 permission-classification bug) should still be
+    // able to receive an update that fixes the issue. The future is
+    // unawaited so it does not block camera/tutorial initialization.
+    unawaited(_checkForUpdate());
+
     // Camera permission check must run BEFORE the first-launch tutorial
     // so a permanently denied user hears the "open settings" prompt
     // instead of a tutorial they can't act on. The tutorial only
@@ -154,10 +161,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _initCameraWithRetry();
 
     _log('=== 启动完成 ===');
-
-    // In-app update check: weekly, Wi-Fi only, after startup so it does
-    // not delay the camera/tutorial feedback.
-    unawaited(_checkForUpdate());
   }
 
   /// Ensures the camera permission is granted before the rest of the app
