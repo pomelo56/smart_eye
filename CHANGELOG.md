@@ -9,6 +9,15 @@
 
 ---
 
+## [0.8.1] — 2026-07-10 (Bugfix 版本)
+
+### Fixed
+- **摄像头权限误判为"永久拒绝"**（严重）：首次安装（从未请求过权限）时，Android 的 `shouldShowRequestPermissionRationale` 也会返回 `false`，原逻辑将这种情况错误识别为"永久拒绝"，直接跳系统设置而不是弹系统权限对话框。修复方式：在 `MainActivity.kt` 中使用 SharedPreferences 持久化 `camera_permission_has_been_requested` 标志，只有在"曾请求过 + rationale=false"同时成立时才判定为永久拒绝。
+- **应用名称显示为"取餐助手"**：`lib/main.dart` 的 `MaterialApp(title)` 遗留了早期项目名，已统一改为"慧眼 SmartEye"；`AndroidManifest.xml` 的 `android:label` 从"慧眼"改为"慧眼SmartEye"（最近任务列表和桌面图标下显示的名称）。
+- **dio 无超时导致更新检查挂起**：`UpdateService` 和 `DownloadService` 所用的 Dio 实例未设置 `connectTimeout`/`receiveTimeout`，在网络不佳时可能长时间卡住在启动阶段。现在更新检查使用 8s 连接/15s 接收超时，下载使用 10s 连接/5 分钟接收超时。
+
+---
+
 ## [0.8.0] — 2026-07-10 (应用内更新)
 
 ### Added

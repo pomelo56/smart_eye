@@ -20,7 +20,7 @@ class SmartEyeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '取餐助手',
+      title: '慧眼 SmartEye',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,

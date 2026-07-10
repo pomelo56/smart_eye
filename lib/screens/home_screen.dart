@@ -124,10 +124,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _updateService = UpdateService(
       prefs: prefs,
       connectivity: ConnectivityService(),
-      dio: Dio(),
+      dio: Dio(BaseOptions(
+        connectTimeout: const Duration(seconds: 8),
+        receiveTimeout: const Duration(seconds: 15),
+        sendTimeout: const Duration(seconds: 8),
+      )),
       packageInfo: packageInfo,
     );
-    _downloadService = DownloadService();
+    _downloadService = DownloadService(
+      dio: Dio(BaseOptions(
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(minutes: 5),
+        sendTimeout: const Duration(seconds: 10),
+      )),
+    );
 
     // Camera permission check must run BEFORE the first-launch tutorial
     // so a permanently denied user hears the "open settings" prompt

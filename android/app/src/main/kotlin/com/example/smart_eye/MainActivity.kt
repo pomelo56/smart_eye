@@ -1,7 +1,9 @@
 package com.example.smart_eye
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.res.AssetFileDescriptor
 import android.media.AudioAttributes
@@ -37,11 +39,14 @@ class MainActivity : FlutterActivity() {
     private val permissionChannelName = "com.smart_eye/permission"
     private val installerChannelName = "com.smart_eye/installer"
     private val cameraPermissionRequestCode = 4242
+    private val permissionPrefsKey = "com.smart_eye.permission_prefs"
+    private val cameraRequestedKey = "camera_permission_has_been_requested"
     private val mainHandler = Handler(Looper.getMainLooper())
     private val isPlaying = AtomicBoolean(false)
     private lateinit var methodChannel: MethodChannel
     private lateinit var permissionChannel: MethodChannel
     private lateinit var installerChannel: MethodChannel
+    private lateinit var prefs: SharedPreferences
 
     /// Pending result for the camera permission request, if the user is
     /// currently being prompted. Set in [requestCameraPermission] and
@@ -55,6 +60,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        prefs = getSharedPreferences(permissionPrefsKey, Context.MODE_PRIVATE)
 
         methodChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -243,13 +249,18 @@ class MainActivity : FlutterActivity() {
      *
      * Values: "granted", "denied", "permanently_denied".
      *
-     * The "permanently denied" case is detected by combining the runtime
-     * check with `shouldShowRequestPermissionRationale`. If the runtime
-     * check returns PERMISSION_DENIED *and* the user has not selected
-     * "Don't ask again", `shouldShowRequestPermissionRationale` returns
-     * true on the next request. When it returns false, we know the
-     * dialog will not be shown again and the only path is the system
-     * settings page.
+     * The "permanently denied" case requires two conditions to both hold:
+     * 1. The runtime check returns PERMISSION_DENIED.
+     * 2. We have previously asked the user for the permission at least
+     *    once (tracked in SharedPreferences), AND
+     *    `shouldShowRequestPermissionRationale` returns false.
+     *
+     * On a fresh install, before we have ever asked the user,
+     * `shouldShowRequestPermissionRationale` also returns false. Without
+     * the persistent "has been requested" flag we would incorrectly
+     * classify every first launch as permanently denied and jump straight
+     * to the system settings page without ever showing the system
+     * permission dialog.
      */
     private fun currentCameraPermissionStatus(): String {
         val granted = ContextCompat.checkSelfPermission(
@@ -257,14 +268,18 @@ class MainActivity : FlutterActivity() {
         ) == PackageManager.PERMISSION_GRANTED
         if (granted) return "granted"
 
+        val hasRequestedBefore = prefs.getBoolean(cameraRequestedKey, false)
+        if (!hasRequestedBefore) {
+            // Never asked the user yet — the system dialog can still be shown.
+            return "denied"
+        }
+
         val rationale = ActivityCompat.shouldShowRequestPermissionRationale(
             this, Manifest.permission.CAMERA
         )
-        // If rationale is false and we don't have the permission, the
-        // user has previously selected "Don't ask again" (or it's the
-        // first launch on API < 23). We treat this as permanently denied
-        // for app purposes: the system dialog won't help, route to
-        // settings.
+        // If rationale is false AND we have asked before, the user selected
+        // "Don't ask again". The system dialog will not appear; the only
+        // recovery path is the settings page.
         return if (rationale) "denied" else "permanently_denied"
     }
 
@@ -292,6 +307,10 @@ class MainActivity : FlutterActivity() {
             result.success("denied")
             return
         }
+
+        // Record that we have asked the user at least once, so future
+        // checks can distinguish "never asked" from "permanently denied".
+        prefs.edit().putBoolean(cameraRequestedKey, true).apply()
 
         pendingCameraResult = result
         ActivityCompat.requestPermissions(
