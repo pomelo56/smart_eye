@@ -7,6 +7,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- **版本治理与 v1.0 发布冻结**
+  - `scripts/release.sh` 新增版本门禁：
+    - 禁止发布 major >= 1 的 tag（`v1.0.0` 等）
+    - 校验 tag 与 `pubspec.yaml` 的 versionName 一致
+    - 如需强制发布 v1.0，必须显式设置 `ALLOW_V1_RELEASE=1`
+  - `VERSION.md` 新增 v1.0 readiness checklist，明确正式版发布前必须完成的 7 项条件
+  - `AGENTS.md` §6.3 新增版本约束：未完成 checklist 前禁止提升 major 版本
+  - `docs/ROADMAP.md` 更新版本规划，将 v1.0.0 标记为「已冻结」
+
 ---
 
 ## [0.8.3] — 2026-07-10 (应用内更新端到端验证)

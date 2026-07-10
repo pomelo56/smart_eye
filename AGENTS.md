@@ -209,6 +209,7 @@ smart_eye/
 - ❌ 禁止：引入不必要的第三方依赖（每个依赖需说明理由）
 - ❌ 禁止：在 main 分支直接开发（使用 feature worktree）
 - ❌ 禁止：跳过测试直接提交代码
+- ❌ 禁止：在未完成 `VERSION.md` 中 v1.0 readiness checklist 前，将 `pubspec.yaml` 的 major 版本提升到 `1` 或发布 `v1.0.0` 标签（`scripts/release.sh` 已硬拦截）
 
 ---
 

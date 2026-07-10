@@ -24,6 +24,36 @@ if ! [[ "$VERSION_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     exit 1
 fi
 
+# ====== v1.0 发布冻结门禁 ======
+# 在未完成 v1.0 readiness checklist 前，禁止发布 major >= 1 的版本。
+# 如需强制发布 v1.0，必须显式设置 ALLOW_V1_RELEASE=1。
+TAG_MAJOR=$(echo "$VERSION_TAG" | sed -E 's/^v([0-9]+).*/\1/')
+PUBSPEC_VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
+PUBSPEC_MAJOR=$(echo "$PUBSPEC_VERSION" | cut -d. -f1)
+
+if [ "$TAG_MAJOR" -ge 1 ] && [ "${ALLOW_V1_RELEASE:-0}" != "1" ]; then
+    echo "❌ 错误: 当前禁止发布 v1.0 及以上版本"
+    echo "   原因: VERSION.md 中的 v1.0 readiness checklist 尚未全部完成"
+    echo "   如需强制发布，请设置: ALLOW_V1_RELEASE=1 $0 $VERSION_TAG"
+    echo "   注意: 强制发布前必须人工确认 checklist 已全部通过"
+    exit 1
+fi
+
+if [ "$PUBSPEC_MAJOR" -ge 1 ] && [ "${ALLOW_V1_RELEASE:-0}" != "1" ]; then
+    echo "❌ 错误: pubspec.yaml 的 major 版本为 $PUBSPEC_MAJOR，已达到 v1.0 冻结线"
+    echo "   在未完成 v1.0 readiness checklist 前，不允许将 major 版本提升到 1"
+    exit 1
+fi
+
+# 校验 tag 与 pubspec.yaml 的 versionName 一致（Flutter 的 +build 不计入 tag）
+PUBSPEC_VERSION_NAME=$(echo "$PUBSPEC_VERSION" | cut -d'+' -f1)
+EXPECTED_TAG="v$PUBSPEC_VERSION_NAME"
+if [ "$VERSION_TAG" != "$EXPECTED_TAG" ]; then
+    echo "❌ 错误: tag '$VERSION_TAG' 与 pubspec.yaml versionName '$PUBSPEC_VERSION_NAME' 不一致"
+    echo "   请同步 VERSION.md、CHANGELOG.md 和 pubspec.yaml 后再发布"
+    exit 1
+fi
+
 # ====== 环境检查 ======
 if [ ! -f "pubspec.yaml" ]; then
     echo "❌ 错误: 请在项目根目录运行此脚本"
