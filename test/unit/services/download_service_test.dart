@@ -59,7 +59,7 @@ void main() {
       final savePath = '${tempDir.path}/smart_eye.apk';
 
       final result = await service.downloadApk(
-        'https://example.com/app.apk',
+        'https://github.com/pomelo56/smart_eye/releases/download/v0.8.5/app-release.apk',
         savePath,
       );
 
@@ -76,7 +76,7 @@ void main() {
         ..writeAsStringSync('old content');
 
       await service.downloadApk(
-        'https://example.com/app.apk',
+        'https://gitee.com/free-style_2_0/smart_eye/releases/download/v0.8.5/app-release.apk',
         savePath,
       );
 
@@ -89,7 +89,7 @@ void main() {
       final progressValues = <double>[];
 
       await service.downloadApk(
-        'https://example.com/app.apk',
+        'https://objects.githubusercontent.com/abc/def/app-release.apk',
         savePath,
         onProgress: progressValues.add,
       );
@@ -100,7 +100,9 @@ void main() {
 
     test('rethrows DioException on network failure', () async {
       final error = DioException(
-        requestOptions: RequestOptions(path: 'https://example.com/app.apk'),
+        requestOptions: RequestOptions(
+            path:
+                'https://github.com/pomelo56/smart_eye/releases/download/v0.8.5/app-release.apk'),
         error: 'network error',
       );
       final service = DownloadService(dio: _FakeDio(throwError: error));
@@ -108,10 +110,45 @@ void main() {
 
       expect(
         () => service.downloadApk(
-          'https://example.com/app.apk',
+          'https://github.com/pomelo56/smart_eye/releases/download/v0.8.5/app-release.apk',
           savePath,
         ),
         throwsA(isA<DioException>()),
+      );
+    });
+
+    // CVE-STYLE-004: URL白名单测试
+    test('rejects http:// URLs (non-HTTPS)', () async {
+      final service = DownloadService(dio: _FakeDio());
+      final savePath = '${tempDir.path}/smart_eye.apk';
+
+      expect(
+        () => service.downloadApk('http://github.com/app.apk', savePath),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('rejects URLs from untrusted domains', () async {
+      final service = DownloadService(dio: _FakeDio());
+      final savePath = '${tempDir.path}/smart_eye.apk';
+
+      expect(
+        () => service.downloadApk('https://evil.com/malware.apk', savePath),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(
+        () => service.downloadApk('https://example.com/app.apk', savePath),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('rejects file:// scheme URLs', () async {
+      final service = DownloadService(dio: _FakeDio());
+      final savePath = '${tempDir.path}/smart_eye.apk';
+
+      expect(
+        () => service.downloadApk('file:///data/local/tmp/a.apk', savePath),
+        throwsA(isA<ArgumentError>()),
       );
     });
   });

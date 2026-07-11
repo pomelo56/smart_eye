@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- CVE-STYLE-011: 收窄FileProvider路径暴露，只暴露updates子目录用于APK安装 -->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Expose the app's external cache directory for APK install intents. -->
-    <external-cache-path name="external_cache" path="." />
-    <cache-path name="cache" path="." />
+    <!-- Only expose updates/ subdirectory for APK install intents, not entire cache -->
+    <cache-path name="updates" path="updates/" />
 </paths>

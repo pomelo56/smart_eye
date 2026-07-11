@@ -18,6 +18,56 @@
 
 ---
 
+## [0.8.6] — 2026-07-11 (中危安全修复)
+
+### Security
+- **CVE-STYLE-008（中危）**：历史记录存储使用XOR+Base64混淆，避免SharedPreferences中的取餐码明文可读。不引入新依赖，对历史明文记录兼容（解析失败自动丢弃）。
+- **CVE-STYLE-009（中危）**：release模式不再记录异常堆栈跟踪到日志，仅在debug模式输出完整堆栈，避免通过日志泄露内部实现细节和文件路径。
+- **CVE-STYLE-010（中危）**：APK缓存文件使用版本号命名（`smart_eye_update_v{versionCode}.apk`），不再使用固定可预测文件名`smart_eye_update.apk`，防止路径遍历攻击覆盖已有文件。
+- **CVE-STYLE-011（中危）**：收窄FileProvider暴露路径，从暴露整个cache目录改为仅暴露`cache/updates/`子目录，APK下载路径同步迁移到该子目录。
+- **CVE-STYLE-012（中危）**：临时拍照文件删除逻辑移至`finally`块，确保OCR处理异常时（如ML Kit崩溃、旋转识别失败）临时图片也会被清理，不会残留敏感图像。
+- **CVE-STYLE-013（中危）**：屏幕调试日志覆盖层仅在debug模式显示，release构建中完全隐藏，防止公共场合肩窥泄露识别信息。
+
+### Changed
+- `lib/services/history_service.dart`：新增`_obfuscate`/`_deobfuscate`方法，写入SharedPreferences前进行XOR混淆。
+- `lib/screens/home_screen.dart`：
+  - 引入`foundation.dart`使用`kDebugMode`
+  - APK下载路径改为`cache/updates/smart_eye_update_v{version}.apk`
+  - 临时图片路径保存在`capturedImagePath`变量，finally块中删除
+  - 日志覆盖层用`if (kDebugMode)`条件包裹
+  - 亮度异常堆栈仅在debug模式记录
+- `android/app/src/main/res/xml/file_paths.xml`：FileProvider路径从`cache-path path="."`收窄为`cache-path path="updates/"`。
+
+### Notes
+- 本版本修复了安全审计发现的6个中危漏洞。
+- 历史记录混淆为轻量保护（非强加密），可阻止adb直接grep读取明文取餐码。如需强加密（Android Keystore），后续版本引入flutter_secure_storage。
+- 回滚点：`v0.8.5`。如本版本引入问题，可执行 `git reset --hard v0.8.5` 回滚。
+
+---
+
+## [0.8.5] — 2026-07-11 (高危安全修复)
+
+### Security
+- **CVE-STYLE-007（高危）**：新增Android网络安全配置`network_security_config.xml`，全局禁止HTTP明文流量，防止SSL剥离和HTTP降级攻击。配置`usesCleartextTraffic="false"`，release模式仅信任系统CA证书。
+- **CVE-STYLE-004（高危）**：新增APK下载URL白名单校验机制，仅允许从`gitee.com`、`github.com`及其CDN子域名下载APK。在UpdateService获取下载URL时和DownloadService发起下载前进行双重校验，即使API响应被篡改也无法重定向到恶意服务器。
+- **CVE-STYLE-005（高危）**：OCR日志脱敏处理，不再在日志中记录小票文本内容、平台名称和取餐位置标签，仅记录识别字数。外卖小票可能包含用户姓名、电话、地址等PII，脱敏后避免通过日志泄露隐私。
+- **CVE-STYLE-006（高危）**：外部存储诊断日志默认关闭，新增诊断模式开关，仅在用户主动开启时才写入外部存储。避免日志文件在未授权情况下被其他应用读取。
+
+### Changed
+- 新增`UpdateService.isValidDownloadUrl()`静态方法进行URL白名单校验。
+- `DownloadService.downloadApk()`在发起网络请求前校验URL合法性。
+- `FileLogger`新增`enableDiagnosticMode()`方法和`isDiagnosticModeEnabled`属性。
+- `AndroidManifest.xml`引用`network_security_config`配置。
+- 新增`android/app/src/main/res/xml/network_security_config.xml`网络安全配置文件。
+
+### Notes
+- 本版本修复了安全审计发现的5个高危漏洞中的4个（CVE-STYLE-003 SSL Pinning为框架预留，证书指纹需发布前填入）。
+- 网络安全配置禁止明文HTTP流量，应用内更新使用HTTPS不受影响。
+- 日志脱敏后不影响核心OCR识别和语音播报功能，仅减少日志中的敏感信息。
+- 回滚点：`v0.8.4`。如本版本引入问题，可执行 `git reset --hard v0.8.4` 回滚。
+
+---
+
 ## [0.8.4] — 2026-07-11 (严重安全修复)
 
 ### Security

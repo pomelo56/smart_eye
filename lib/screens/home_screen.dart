@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -389,7 +390,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     try {
       final cacheDir = await getTemporaryDirectory();
-      final apkPath = '${cacheDir.path}/smart_eye_update.apk';
+      // CVE-STYLE-010+011: APK放在updates子目录，配合FileProvider只暴露该目录
+      final updatesDir = Directory('${cacheDir.path}/updates');
+      if (!await updatesDir.exists()) {
+        await updatesDir.create(recursive: true);
+      }
+      final apkPath = '${updatesDir.path}/smart_eye_update_v${info.versionCode}.apk';
       final apkFile = File(apkPath);
 
       if (apkFile.existsSync() && apkFile.lengthSync() > 0) {
@@ -549,7 +555,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _log('亮度 ${result.luminance}/255 → 手电开启失败 (硬件不支持?)');
       }
     } catch (e, st) {
-      _log('亮度处理异常: $e\n$st');
+      // CVE-STYLE-009: release模式不记录堆栈跟踪，避免泄露实现细节
+      if (kDebugMode) {
+        _log('亮度处理异常: $e\n$st');
+      } else {
+        _log('亮度处理异常');
+      }
     } finally {
       _isHandlingDimLight = false;
     }
@@ -611,8 +622,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     _isProcessing = true;
+    String? capturedImagePath;
     try {
       final image = await _cameraController!.takePicture();
+      capturedImagePath = image.path;
 
       // v0.7.2: low-light detection runs on the Y plane of the captured
       // YUV420 image. The Y plane is grayscale and is the right input
@@ -647,12 +660,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // the rotated image space; we'll transform them back later.
       final rotatedText = await _recognizeRotated(image.path, 180);
 
-      // Clean up temp file
-      try {
-        final file = File(image.path);
-        if (await file.exists()) await file.delete();
-      } catch (_) {}
-
       // Merge both recognition results into a single text + block list.
       // Block coordinates from rotated text need to be transformed back to
       // the original image space.
@@ -663,14 +670,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final combinedText = allBlocks.map((b) => b.block.text).join('\n');
       final hasText = combinedText.trim().isNotEmpty;
 
-      // Always log OCR result every 5 seconds
+      // Always log OCR result every 5 seconds (CVE-STYLE-005: 不记录小票文本内容，只记录字数)
       if (_ocrLogTimer == null ||
           DateTime.now().difference(_ocrLogTimer!) >
               const Duration(seconds: 5)) {
-        final preview = combinedText.length > 50
-            ? combinedText.substring(0, 50)
-            : combinedText;
-        _log('OCR: ${hasText ? '${combinedText.length}字 $preview' : '无文字'}');
+        _log('OCR: ${hasText ? '识别到${combinedText.length}字' : '无文字'}');
         _ocrLogTimer = DateTime.now();
       }
 
@@ -681,7 +685,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (codes.isEmpty) {
         codes = _ocrService.extractMealCodesFuzzy(combinedText);
         if (codes.isNotEmpty) {
-          _log('OCR 模糊匹配到取餐码: $codes');
+          _log('OCR 模糊匹配到取餐码');
         }
       }
 
@@ -860,7 +864,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _log(
                 'confirmed=$confirmed cool=${_ocrService.isInCooldown(r.code)}');
             if (confirmed != null) {
-              _log('识别到取餐码: ${r.code} ($platformLabel) ${r.positionLabel}');
+              _log('识别到取餐码: ${r.code}'); // CVE-STYLE-005: 不记录平台和位置标签
               _lastAnnouncedCode = confirmed;
               _lastDetectedPlatform = r.platform;
               _lastCodePosition = r.positionLabel;
@@ -910,6 +914,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _log('扫描错误: $e');
     } finally {
       _isProcessing = false;
+      // CVE-STYLE-012: 在finally块中删除临时图片文件，确保异常时也清理
+      if (capturedImagePath != null) {
+        try {
+          final file = File(capturedImagePath);
+          if (file.existsSync()) file.deleteSync();
+        } catch (_) {}
+      }
     }
   }
 
@@ -1307,36 +1318,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                 ),
 
-              // Log overlay.
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: IgnorePointer(
-                  child: ValueListenableBuilder<List<String>>(
-                    valueListenable: _logger.screenBufferNotifier,
-                    builder: (context, buffer, _) {
-                      return Container(
-                        color: Colors.black.withOpacity(0.8),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 8),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: buffer
-                              .map((l) => Text(
-                                    l,
-                                    style: const TextStyle(
-                                        color: Colors.greenAccent,
-                                        fontSize: 11),
-                                  ))
-                              .toList(),
-                        ),
-                      );
-                    },
+              // Log overlay — CVE-STYLE-013: 仅debug模式显示，release模式隐藏防止肩窥
+              if (kDebugMode)
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: IgnorePointer(
+                    child: ValueListenableBuilder<List<String>>(
+                      valueListenable: _logger.screenBufferNotifier,
+                      builder: (context, buffer, _) {
+                        return Container(
+                          color: Colors.black.withOpacity(0.8),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: buffer
+                                .map((l) => Text(
+                                      l,
+                                      style: const TextStyle(
+                                          color: Colors.greenAccent,
+                                          fontSize: 11),
+                                    ))
+                                .toList(),
+                          ),
+                        );
+                      },
+                    ),
                   ),
                 ),
-              ),
             ],
           ),
         ),

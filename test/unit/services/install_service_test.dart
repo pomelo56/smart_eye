@@ -152,8 +152,8 @@ void main() {
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(channel, (call) async {
           if (call.method == 'installApk') {
-            capturedPath = (call.arguments as Map<dynamic, dynamic>)['path']
-                as String?;
+            capturedPath =
+                (call.arguments as Map<dynamic, dynamic>)['path'] as String?;
             return <String, dynamic>{'success': true};
           }
           return null;
@@ -164,7 +164,9 @@ void main() {
         expect(capturedPath, equals('/tmp/smart_eye.apk'));
       });
 
-      test('returns signature_mismatch when APK verification fails (CVE-STYLE-001)', () async {
+      test(
+          'returns signature_mismatch when APK verification fails (CVE-STYLE-001)',
+          () async {
         // 即使平台installer返回成功，签名校验失败也应该阻止安装
         bool installerCalled = false;
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

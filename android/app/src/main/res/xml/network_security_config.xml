@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- CVE-STYLE-007: 网络安全配置，禁止明文HTTP流量 -->
+<network-security-config>
+    <!-- 全局禁止明文HTTP流量，防止降级攻击 -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Debug模式允许用户证书（方便开发抓包），release模式不允许 -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+
+    <!-- 证书锁定配置（CVE-STYLE-003）
+         注意：证书指纹需要在发布前通过openssl获取并填入
+         获取命令：
+         openssl s_client -connect gitee.com:443 | openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64
+     -->
+    <domain-config>
+        <domain includeSubdomains="true">gitee.com</domain>
+        <domain includeSubdomains="true">github.com</domain>
+        <domain includeSubdomains="true">objects.githubusercontent.com</domain>
+        <!-- 发布前填入实际证书SHA-256指纹，示例：
+        <pin-set expiration="2027-07-11">
+            <pin digest="SHA-256">AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</pin>
+        </pin-set>
+        -->
+    </domain-config>
+</network-security-config>

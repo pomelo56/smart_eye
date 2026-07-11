@@ -35,6 +35,10 @@ class UpdateInfo {
 ///
 /// The check is throttled to once per week and only runs on Wi-Fi to avoid
 /// surprising users with cellular data usage.
+///
+/// **CVE-STYLE-004:** Download URLs are validated against a trusted domain
+/// whitelist to prevent redirection to malicious servers even if the API
+/// response is tampered with.
 class UpdateService {
   static const _lastCheckKey = 'last_update_check_millis';
   static const _checkInterval = Duration(days: 7);
@@ -45,11 +49,43 @@ class UpdateService {
   static const _githubLatestUrl =
       'https://api.github.com/repos/pomelo56/smart_eye/releases/latest';
 
+  /// CVE-STYLE-004: Trusted domains for APK downloads.
+  ///
+  /// Even if the release API response is tampered with, download URLs must
+  /// point to one of these domains. This prevents redirection to attacker-
+  /// controlled servers.
+  static const _trustedDownloadDomains = <String>{
+    'gitee.com',
+    'dl.gitee.com',
+    'github.com',
+    'objects.githubusercontent.com',
+    'github-releases.githubusercontent.com',
+  };
+
   final SharedPreferences _prefs;
   final ConnectivityService _connectivity;
   final Dio _dio;
   final PackageInfo _packageInfo;
   final DateTime Function() _clock;
+
+  /// Validates that [url] is an HTTPS URL pointing to a trusted domain.
+  ///
+  /// Returns false for:
+  /// - Empty or malformed URLs
+  /// - Non-HTTPS schemes (http://, file://, content://, etc.)
+  /// - Domains not in [_trustedDownloadDomains]
+  static bool isValidDownloadUrl(String url) {
+    if (url.isEmpty) return false;
+
+    final uri = Uri.tryParse(url);
+    if (uri == null) return false;
+    if (uri.scheme != 'https') return false;
+
+    final host = uri.host;
+    return _trustedDownloadDomains.any(
+      (domain) => host == domain || host.endsWith('.$domain'),
+    );
+  }
 
   /// Creates an [UpdateService].
   UpdateService({
@@ -113,8 +149,8 @@ class UpdateService {
       throw Exception('cannot parse versionCode from tag "$tag"');
     }
 
-    final assets = (data['assets'] as List<dynamic>? ?? [])
-        .cast<Map<String, dynamic>>();
+    final assets =
+        (data['assets'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
     final asset = assets.firstWhere(
       (a) => a['name'] == _assetName,
       orElse: () => <String, dynamic>{},
@@ -123,13 +159,20 @@ class UpdateService {
     if (downloadUrl == null || downloadUrl.isEmpty) {
       throw Exception('$_assetName not found in release assets');
     }
+    // CVE-STYLE-004: Validate download URL against trusted domain whitelist
+    if (!isValidDownloadUrl(downloadUrl)) {
+      throw Exception(
+          'Download URL is not from a trusted domain: $downloadUrl');
+    }
 
     final localVersionCode = int.tryParse(_packageInfo.buildNumber) ?? 0;
     if (remoteVersionCode <= localVersionCode) return null;
 
     return UpdateInfo(
       versionCode: remoteVersionCode,
-      versionName: tag.replaceFirst(RegExp(r'^v'), '').replaceFirst(RegExp(r'\+\d+\s*$'), ''),
+      versionName: tag
+          .replaceFirst(RegExp(r'^v'), '')
+          .replaceFirst(RegExp(r'\+\d+\s*$'), ''),
       downloadUrl: downloadUrl,
       releaseNotes: body,
     );
@@ -143,8 +186,7 @@ class UpdateService {
     final tagMatch = RegExp(r'\+(\d+)\s*$').firstMatch(tag);
     if (tagMatch != null) return int.tryParse(tagMatch.group(1)!);
 
-    final bodyMatch =
-        RegExp(r'[Vv]ersionCode[:\s]*(\d+)').firstMatch(body);
+    final bodyMatch = RegExp(r'[Vv]ersionCode[:\s]*(\d+)').firstMatch(body);
     if (bodyMatch != null) return int.tryParse(bodyMatch.group(1)!);
 
     return null;

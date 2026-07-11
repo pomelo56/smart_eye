@@ -16,6 +16,7 @@ class FileLogger {
   File? _logFile;
   String? _logDir;
   bool _initialized = false;
+  bool _diagnosticModeEnabled = false; // CVE-STYLE-006: 默认关闭外部诊断日志
 
   /// Maximum log files to keep (7 days).
   static const _maxLogFiles = 7;
@@ -47,8 +48,20 @@ class FileLogger {
       await _rotateIfNeeded();
       _logFile = await _createLogFile();
 
-      // Also write to an app-specific external file so diagnostics can be
-      // pulled via adb on release builds (run-as is not available).
+      _initialized = true;
+      await write('INFO', 'FileLogger 初始化完成, dir=$_logDir');
+    } catch (e) {
+      debugPrint('[FileLogger] 初始化失败: $e');
+    }
+  }
+
+  /// CVE-STYLE-006: 启用诊断模式，开始写入外部存储日志（用于问题排查）
+  ///
+  /// 诊断模式默认关闭。开启后日志会写入外部存储，方便adb pull收集。
+  /// 用户反馈问题时才应手动开启。
+  Future<void> enableDiagnosticMode(bool enabled) async {
+    _diagnosticModeEnabled = enabled;
+    if (enabled && _externalLogFile == null) {
       try {
         final extDir = await getExternalStorageDirectory();
         if (extDir != null) {
@@ -61,18 +74,18 @@ class FileLogger {
               '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
           final timeStr =
               '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
-          _externalLogFile = File('${extLogDir.path}/smarteye_${dateStr}_$timeStr.log');
+          _externalLogFile =
+              File('${extLogDir.path}/smarteye_${dateStr}_$timeStr.log');
+          await write('INFO', '诊断模式已启用');
         }
       } catch (e) {
         debugPrint('[FileLogger] 外部日志初始化失败: $e');
       }
-
-      _initialized = true;
-      await write('INFO', 'FileLogger 初始化完成, dir=$_logDir');
-    } catch (e) {
-      debugPrint('[FileLogger] 初始化失败: $e');
     }
   }
+
+  /// 当前是否处于诊断模式
+  bool get isDiagnosticModeEnabled => _diagnosticModeEnabled;
 
   Future<File> _createLogFile() async {
     final now = DateTime.now();
@@ -139,8 +152,8 @@ class FileLogger {
       }
     }
 
-    // External log copy for adb diagnostics on release builds.
-    if (_externalLogFile != null) {
+    // External log copy for adb diagnostics on release builds (only when diagnostic mode is enabled)
+    if (_diagnosticModeEnabled && _externalLogFile != null) {
       try {
         await _externalLogFile!.writeAsString('$line\n', mode: FileMode.append);
       } catch (e) {

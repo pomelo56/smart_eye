@@ -2,7 +2,12 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 
+import 'update_service.dart';
+
 /// Downloads the APK from a remote URL to a local file.
+///
+/// **CVE-STYLE-004:** All download URLs are validated against the trusted
+/// domain whitelist before any network request is made.
 class DownloadService {
   final Dio _dio;
 
@@ -17,12 +22,18 @@ class DownloadService {
   /// whenever the download makes progress. Callers can ignore it or use it
   /// to drive accessibility announcements.
   ///
+  /// Throws [ArgumentError] if [url] is not from a trusted domain.
   /// Throws [DioException] on network errors.
   Future<String> downloadApk(
     String url,
     String savePath, {
     void Function(double progress)? onProgress,
   }) async {
+    // CVE-STYLE-004: Defense in depth - validate URL again before download
+    if (!UpdateService.isValidDownloadUrl(url)) {
+      throw ArgumentError('Download URL is not from a trusted domain: $url');
+    }
+
     final file = File(savePath);
     if (file.existsSync()) {
       file.deleteSync();
