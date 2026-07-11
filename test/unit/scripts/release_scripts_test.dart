@@ -60,17 +60,17 @@ void main() {
 
     test('release-gitee.sh CHANGELOG matcher strips v prefix', () async {
       // 防止有人写回 ## [v0.7.2]（实际 CHANGELOG 是 ## [0.7.2]）
-      final script = await File(
-              '/Users/pomelo/Project/smart_eye/scripts/release-gitee.sh')
-          .readAsString();
+      final script =
+          await File('/Users/pomelo/Project/smart_eye/scripts/release-gitee.sh')
+              .readAsString();
       expect(script, contains(r'local bare="${tag#v}"'),
           reason: 'release-gitee.sh must strip v prefix from CHANGELOG match');
     });
 
     test('release-gitee.sh supports GITEE_NOTES_FILE', () async {
-      final script = await File(
-              '/Users/pomelo/Project/smart_eye/scripts/release-gitee.sh')
-          .readAsString();
+      final script =
+          await File('/Users/pomelo/Project/smart_eye/scripts/release-gitee.sh')
+              .readAsString();
       expect(script, contains('GITEE_NOTES_FILE'),
           reason: 'release-gitee.sh must support GITEE_NOTES_FILE override');
     });
@@ -78,7 +78,8 @@ void main() {
 
   group('release-github.sh safety', () {
     test('file exists and is executable', () async {
-      final file = File('/Users/pomelo/Project/smart_eye/scripts/release-github.sh');
+      final file =
+          File('/Users/pomelo/Project/smart_eye/scripts/release-github.sh');
       expect(await file.exists(), isTrue);
       // 检查 +x 权限
       final stat = await Process.run('stat', ['-f', '%Lp', file.path]);
@@ -131,11 +132,13 @@ void main() {
               '/Users/pomelo/Project/smart_eye/scripts/release-github.sh')
           .readAsString();
       expect(script.contains('GITHUB_TOKEN'), isFalse,
-          reason: 'release-github.sh must NOT read GITHUB_TOKEN env (use gh auth)');
+          reason:
+              'release-github.sh must NOT read GITHUB_TOKEN env (use gh auth)');
       // 脚本里可以用 gh 命令；但不能用 `curl` 直接调 GitHub API（那样会暴露 token）
       // 用一个简单启发：脚本中不出现 `curl -X` 或 `curl ... Authorization`
       expect(script.contains('curl -X'), isFalse,
-          reason: 'must not call GitHub API via curl with -X (avoids token in argv)');
+          reason:
+              'must not call GitHub API via curl with -X (avoids token in argv)');
       expect(script.contains('Authorization'), isFalse,
           reason: 'must not pass Authorization header (token leak risk)');
     });
@@ -167,7 +170,8 @@ void main() {
 
   group('release-gitee.sh unchanged behavior', () {
     test('file still exists and is executable', () async {
-      final file = File('/Users/pomelo/Project/smart_eye/scripts/release-gitee.sh');
+      final file =
+          File('/Users/pomelo/Project/smart_eye/scripts/release-gitee.sh');
       expect(await file.exists(), isTrue);
       final stat = await Process.run('stat', ['-f', '%Lp', file.path]);
       final mode = int.tryParse(stat.stdout.toString().trim()) ?? 0;

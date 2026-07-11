@@ -40,17 +40,42 @@ extract_changelog() {
         echo "Release $tag"
         return
     fi
-    # CHANGELOG 标题格式是 `## [0.7.2]`（无 v 前缀），入参是 v0.7.2，
-    # 所以先剥掉 v 前缀再做模式匹配。
+    # CHANGELOG 标题格式是 `## [0.7.2] — YYYY-MM-DD (标题)`（无 v 前缀），入参是 v0.7.2，
+    # 所以先剥掉 v 前缀再做字符串匹配。使用 index() 精确匹配，避免 [ / ] 被当作正则字符类。
     local bare="${tag#v}"
-    awk -v target="## [$bare]" '
-        $0 ~ target { capture=1; next }
+    local header="## [$bare]"
+    awk -v header="$header" '
+        index($0, header) == 1 { capture=1; next }
         capture && /^## \[/ { exit }
         capture { print }
     ' "$changelog" | head -c 4000
 }
 
+# 从 CHANGELOG.md 提取本版本的标题（用于 release name）
+# 格式: ## [0.8.3] — 2026-07-10 (应用内更新正式版) → "v0.8.3 — 应用内更新正式版"
+extract_release_name() {
+    local tag="$1"
+    local changelog="CHANGELOG.md"
+    if [ ! -f "$changelog" ]; then
+        echo "$tag"
+        return
+    fi
+    local bare="${tag#v}"
+    local header="## [$bare]"
+    local title_line
+    title_line=$(awk -v header="$header" 'index($0, header) == 1 { print; exit }' "$changelog")
+    # 从 "(标题)" 中提取标题文字，去掉日期前缀
+    local subtitle
+    subtitle=$(echo "$title_line" | sed -E "s/^## \[$bare\][^—]*— [0-9]{4}-[0-9]{2}-[0-9]{2} \((.+)\)$/\1/")
+    if [ -n "$subtitle" ] && [ "$subtitle" != "$title_line" ]; then
+        echo "$tag — $subtitle"
+    else
+        echo "$tag"
+    fi
+}
+
 RELEASE_BODY=$(extract_changelog "$VERSION_TAG")
+RELEASE_NAME=$(extract_release_name "$VERSION_TAG")
 # 如果设置了 GITEE_NOTES_FILE，直接从文件读 release body（优先级最高，
 # 便于传带换行/emoji/引号的中文 markdown note）
 if [ -n "${GITEE_NOTES_FILE:-}" ] && [ -f "$GITEE_NOTES_FILE" ]; then
@@ -76,10 +101,10 @@ if echo "$LOOKUP_RESPONSE" | grep -q '"id"'; then
     echo "✅ Release 已存在 (id=$RELEASE_ID)"
 else
     # 创建新 release
-    echo "📦 创建 Gitee release: $VERSION_TAG"
+    echo "📦 创建 Gitee release: $RELEASE_NAME"
     CREATE_BODY=$(jq -n \
         --arg tag_name "$VERSION_TAG" \
-        --arg name "$VERSION_TAG" \
+        --arg name "$RELEASE_NAME" \
         --arg body "$RELEASE_BODY" \
         --arg target_commitish "main" \
         '{tag_name: $tag_name, name: $name, body: $body, target_commitish: $target_commitish, prerelease: false}')

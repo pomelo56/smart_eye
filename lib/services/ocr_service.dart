@@ -138,9 +138,8 @@ class OcrService {
         final idx = text.indexOf(rule.keyword, searchFrom);
         if (idx < 0) break;
         final keywordEnd = idx + rule.keyword.length;
-        final distance = idx < codeStart
-            ? codeStart - keywordEnd
-            : idx - codeEnd;
+        final distance =
+            idx < codeStart ? codeStart - keywordEnd : idx - codeEnd;
         if (distance <= _fuzzyPlatformWindow) return true;
         searchFrom = keywordEnd;
       }

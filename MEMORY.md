@@ -49,6 +49,8 @@
 | 音频叠加问题 | `speak()` 是 fire-and-forget（不等待音频完成），如果连续调用两个 `speak()` 会出现声音重叠。不能用 `delay + stop()` 来「修复」，因为音频时长不确定。正确方案：只保留一个启动语音，或合并到一个连续播报中。 | 实机测试验证（重复踩坑 2 次） | 2026-07-04 |
 | 应用内更新源优先 Gitee，GitHub 兜底 | Gitee 是国内源，访问更快更稳定；GitHub 作为 fallback 防止 Gitee 不可用。必须同时维护两个 Release，否则 fallback 到 GitHub 在国内可能连接超时。 | 实机测试验证（2026-07-10 因未同步发布 Gitee Release 导致下载卡死） | 2026-07-10 |
 | 摄像头「永久拒绝」误判 | `shouldShowRequestPermissionRationale()` 在首次安装（未请求过权限）时也返回 `false`，导致首次启动被误判为永久拒绝。必须持久化「是否请求过」标志，且该标志必须放在 `noBackupFilesDir` 中，避免 OEM/ColorOS/Google 备份在卸载重装后恢复旧标志。 | 实机测试验证（2026-07-10 因 SharedPreferences 被备份恢复复现） | 2026-07-10 |
+| GITEE_TOKEN 必须持久化到 .zshrc | 临时在终端执行 `export GITEE_TOKEN=xxx` 只在当前会话有效，关闭终端后环境变量丢失，导致后续发布时 `release.sh` 跳过 Gitee Release 自动上传，需要手动操作。必须写入 `~/.zshrc` 才能跨会话持久化。 | 实机踩坑（2026-07-11 因 token 未持久化导致需要手动上传 Gitee） | 2026-07-11 |
+| awk 正则匹配 CHANGELOG 标题失败 | 发布脚本 `extract_changelog()` 使用 `$0 ~ "## [0.8.3]"` 做正则匹配时，`[` 和 `]` 是正则字符类元字符，不会被当作字面量匹配，导致从 CHANGELOG 提取版本内容失败，Release body 回退为「详见 CHANGELOG.md」链接。修复：使用 `index($0, header) == 1` 做字符串精确匹配，或用 `\\[` `\\]` 转义。 | 实机踩坑（2026-07-11 Gitee v0.8.3 release body 为 fallback 链接） | 2026-07-11 |
 
 ---
 

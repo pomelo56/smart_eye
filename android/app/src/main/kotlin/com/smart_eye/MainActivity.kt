@@ -1,4 +1,4 @@
-package com.example.smart_eye
+package com.smart_eye
 
 import android.Manifest
 import android.content.Context

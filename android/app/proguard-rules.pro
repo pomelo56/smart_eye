@@ -37,7 +37,7 @@
 # --- MethodChannel entry points ---
 # MainActivity.kt is referenced by AndroidManifest.xml, but R8 sometimes
 # strips it if the manifest is not parsed early. Keep it explicitly.
--keep class com.example.smart_eye.MainActivity { *; }
+-keep class com.smart_eye.MainActivity { *; }
 
 # --- Kotlin metadata ---
 # Required for Kotlin reflection used by some plugins.

@@ -83,6 +83,9 @@ class HistoryService {
 
   /// XOR-obfuscates a plaintext string so it is not human-readable in
   /// shared_prefs XML.
+  /// Visible for testing only — do not call from production code.
+  static String obfuscateForTest(String plain) => _obfuscate(plain);
+
   static String _obfuscate(String plain) {
     final bytes = utf8.encode(plain);
     final out = <int>[];

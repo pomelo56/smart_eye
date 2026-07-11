@@ -61,10 +61,15 @@ void main() {
     });
 
     test('drops records older than 24 hours', () async {
+      // CVE-STYLE-008: Storage is now XOR+Base64 obfuscated, so we must
+      // obfuscate test data before writing it to mock SharedPreferences.
+      final now = DateTime.now();
       SharedPreferences.setMockInitialValues({
         'meal_code_history': [
-          '#fresh|${DateTime.now().millisecondsSinceEpoch}',
-          '#old|${DateTime.now().subtract(const Duration(hours: 25)).millisecondsSinceEpoch}',
+          HistoryService.obfuscateForTest(
+              '#fresh|${now.millisecondsSinceEpoch}'),
+          HistoryService.obfuscateForTest(
+              '#old|${now.subtract(const Duration(hours: 25)).millisecondsSinceEpoch}'),
         ],
       });
       final service = await createService();

@@ -55,16 +55,41 @@ extract_changelog() {
         echo "Release $tag"
         return
     fi
-    # tag 形如 v0.7.2，CHANGELOG 形如 [0.7.2]
+    # tag 形如 v0.7.2，CHANGELOG 形如 ## [0.7.2] — YYYY-MM-DD (标题)
+    # 使用 index() 做字符串精确匹配，避免 [ / ] 在正则中被当作字符类
     local bare="${tag#v}"
-    awk -v target="## [$bare]" '
-        $0 ~ target { capture=1; next }
+    local header="## [$bare]"
+    awk -v header="$header" '
+        index($0, header) == 1 { capture=1; next }
         capture && /^## \[/ { exit }
         capture { print }
     ' "$changelog" | head -c 4000
 }
 
+# 从 CHANGELOG.md 提取本版本的标题（用于 release name）
+# 格式: ## [0.8.3] — 2026-07-10 (应用内更新正式版) → "v0.8.3 — 应用内更新正式版"
+extract_release_name() {
+    local tag="$1"
+    local changelog="CHANGELOG.md"
+    if [ ! -f "$changelog" ]; then
+        echo "$tag"
+        return
+    fi
+    local bare="${tag#v}"
+    local header="## [$bare]"
+    local title_line
+    title_line=$(awk -v header="$header" 'index($0, header) == 1 { print; exit }' "$changelog")
+    local subtitle
+    subtitle=$(echo "$title_line" | sed -E "s/^## \[$bare\][^—]*— [0-9]{4}-[0-9]{2}-[0-9]{2} \((.+)\)$/\1/")
+    if [ -n "$subtitle" ] && [ "$subtitle" != "$title_line" ]; then
+        echo "$tag — $subtitle"
+    else
+        echo "$tag"
+    fi
+}
+
 RELEASE_BODY=$(extract_changelog "$VERSION_TAG")
+RELEASE_NAME=$(extract_release_name "$VERSION_TAG")
 # 如果设置了 GITHUB_NOTES_FILE，直接从文件读 release body（优先级最高，
 # 便于传带换行/emoji/引号的中文 markdown note）
 if [ -n "${GITHUB_NOTES_FILE:-}" ] && [ -f "$GITHUB_NOTES_FILE" ]; then
@@ -81,13 +106,14 @@ echo ""
 echo "🔍 查找 release: $VERSION_TAG"
 
 if gh release view "$VERSION_TAG" --repo "$GITHUB_REPO" >/dev/null 2>&1; then
-    echo "✅ Release 已存在，将上传/替换 APK 资产"
-    # 已有 release：先删旧 APK（如果存在），再传新的
-    gh release delete-asset "$APK_NAME" --repo "$GITHUB_REPO" >/dev/null 2>&1 || true
+    echo "✅ Release 已存在，将上传/替换 APK 资产并更新标题/描述"
+    # 已有 release：更新标题和描述，先删旧 APK（如果存在），再传新的
+    gh release edit "$VERSION_TAG" --repo "$GITHUB_REPO" --title "$RELEASE_NAME" --notes "$RELEASE_BODY"
+    gh release delete-asset "$VERSION_TAG" "$APK_NAME" --repo "$GITHUB_REPO" >/dev/null 2>&1 || true
     UPLOAD_ARGS=(upload "$VERSION_TAG" "$APK_PATH" --repo "$GITHUB_REPO"
                  --clobber)
 else
-    echo "📦 创建 GitHub release: $VERSION_TAG"
+    echo "📦 创建 GitHub release: $RELEASE_NAME"
     # 把 release 钉死到 tag 指向的 commit（而不是 main 分支当前 HEAD），
     # 否则下次 main 推进时，这个 release 的 target_commitish 会被自动跟踪，
     # 破坏 release ↔ commit 的一一对应关系。
@@ -95,7 +121,7 @@ else
     target_commit=$(git rev-list -n 1 "$VERSION_TAG" 2>/dev/null || echo "main")
     UPLOAD_ARGS=(release create "$VERSION_TAG" "$APK_PATH"
                  --repo "$GITHUB_REPO"
-                 --title "$VERSION_TAG"
+                 --title "$RELEASE_NAME"
                  --notes "$RELEASE_BODY"
                  --target "$target_commit")
 fi

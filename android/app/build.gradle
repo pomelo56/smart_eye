@@ -13,7 +13,7 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.example.smart_eye"
+    namespace = "com.smart_eye"
     compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
@@ -27,8 +27,8 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.smart_eye"
+        // CVE-STYLE-015: 使用正式包名 com.smart_eye 替换默认的 com.example.smart_eye
+        applicationId = "com.smart_eye"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 24 // Android 7.0, required for camera and ML Kit

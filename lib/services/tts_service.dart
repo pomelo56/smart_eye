@@ -31,10 +31,46 @@ class TtsService {
   /// The list of engines reported by the OS. Always empty in asset mode.
   List<String> availableEngines = [];
 
+  /// CVE-STYLE-018: Mutex to prevent concurrent playback (race condition fix).
+  ///
+  /// Ensures that only one audio sequence plays at a time. If a new speak()
+  /// call arrives while another is playing, the previous one is stopped first.
+  Future<void>? _playbackMutex;
+
   TtsService({AudioService? audioService})
       : _audioService = audioService ?? AudioService();
 
   bool get isInitialized => _isInitialized;
+
+  /// CVE-STYLE-018: Plays audio clips with mutex protection to prevent overlap.
+  ///
+  /// Stops any currently playing audio before starting the new sequence.
+  /// Uses a mutex to ensure only one playback runs at a time.
+  Future<void> _playWithMutex(List<String> paths) async {
+    // Wait for any previous playback to finish being stopped
+    if (_playbackMutex != null) {
+      await _playbackMutex;
+    }
+
+    // Create a completer for this playback session
+    final completer = Completer<void>();
+    _playbackMutex = completer.future;
+
+    try {
+      // Stop any current playback first (per AGENTS.md KI-001)
+      await _audioService.stop();
+
+      // Play the new sequence
+      if (paths.isNotEmpty) {
+        await _audioService.playAssets(paths);
+      }
+    } finally {
+      if (!completer.isCompleted) {
+        completer.complete();
+      }
+      _playbackMutex = null;
+    }
+  }
 
   /// Initializes the audio playback service.
   ///
@@ -56,6 +92,7 @@ class TtsService {
   /// - Distance feedback: "beep_slow" or "beep_fast" (internal codes)
   ///
   /// Dynamic meal codes are decomposed into individual digit clips.
+  /// Concurrent calls are serialized via [_playWithMutex] to prevent overlap.
   Future<void> speak(String text) async {
     if (!_isInitialized) {
       debugPrint('[TTS] speak skipped: not initialized');
@@ -69,8 +106,8 @@ class TtsService {
       return;
     }
 
-    final ok = await _audioService.playAssets(paths);
-    lastSpeakResult = ok ? 1 : 0;
+    await _playWithMutex(paths);
+    lastSpeakResult = 1;
     debugPrint('[TTS] speak "$text" -> $lastSpeakResult');
   }
 
@@ -86,7 +123,7 @@ class TtsService {
   /// Plays the "识别中，手机请稳一些" scanning prompt.
   Future<void> speakScanning() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/scanning.mp3']);
+    await _playWithMutex(['assets/audio/scanning.mp3']);
   }
 
   /// Plays the "发现外卖，识别中，手机请稳一些" prompt.
@@ -96,7 +133,7 @@ class TtsService {
   /// is enforced by the caller).
   Future<void> speakDetectedTakeout() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(const [
+    await _playWithMutex(const [
       'assets/audio/faxian_waimai.mp3',
       'assets/audio/shibiezhong.mp3',
       'assets/audio/please_steady.mp3',
@@ -132,20 +169,20 @@ class TtsService {
       clips.add('assets/audio/hao.mp3');
     }
 
-    await _audioService.playAssets(clips);
+    await _playWithMutex(clips);
   }
 
   /// Plays a fixed "no history" prompt.
   Future<void> speakNoHistory() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/no_history.mp3']);
+    await _playWithMutex(['assets/audio/no_history.mp3']);
   }
 
   /// Plays the prompt that camera permission is denied (first-time denial,
   /// the user can still grant it via the system dialog).
   Future<void> speakCameraPermissionDenied() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/perm_denied.mp3']);
+    await _playWithMutex(['assets/audio/perm_denied.mp3']);
   }
 
   /// Plays the prompt that camera permission has been permanently denied
@@ -153,15 +190,14 @@ class TtsService {
   /// only recovery path is to open the app's settings page manually.
   Future<void> speakCameraPermissionPermanentlyDenied() async {
     if (!_isInitialized) return;
-    await _audioService
-        .playAssets(['assets/audio/perm_permanently_denied.mp3']);
+    await _playWithMutex(['assets/audio/perm_permanently_denied.mp3']);
   }
 
   /// Plays a short "opening settings now" chime before launching the
   /// system settings app.
   Future<void> speakOpeningSettings() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/opening_settings.mp3']);
+    await _playWithMutex(['assets/audio/opening_settings.mp3']);
   }
 
   /// Plays the "lighting is dim, opening torch" prompt (v0.7.2).
@@ -172,7 +208,7 @@ class TtsService {
   /// repeating on every frame.
   Future<void> speakLuminanceDim() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/luminance_dim.mp3']);
+    await _playWithMutex(['assets/audio/luminance_dim.mp3']);
   }
 
   /// Plays a short confirmation that the torch was turned on.
@@ -181,7 +217,7 @@ class TtsService {
   /// clear "the system did what you asked" feedback.
   Future<void> speakTorchOn() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/torch_on.mp3']);
+    await _playWithMutex(['assets/audio/torch_on.mp3']);
   }
 
   /// Plays the prompt for when the device refused to enable the torch
@@ -189,7 +225,7 @@ class TtsService {
   /// flashlight from the notification shade.
   Future<void> speakTorchFailed() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/torch_failed.mp3']);
+    await _playWithMutex(['assets/audio/torch_failed.mp3']);
   }
 
   /// Plays a list of audio clips directly.
@@ -198,7 +234,7 @@ class TtsService {
   /// that don't map to a text utterance.
   Future<void> speakAudioClips(List<String> clips) async {
     if (!_isInitialized || clips.isEmpty) return;
-    await _audioService.playAssets(clips);
+    await _playWithMutex(clips);
   }
 
   /// Announces multiple meal codes with platforms and positions.
@@ -234,7 +270,7 @@ class TtsService {
       if (posAudio != null) clips.add(posAudio);
     }
 
-    await _audioService.playAssets(clips);
+    await _playWithMutex(clips);
   }
 
   /// Announces a single code with platform and position.
@@ -263,7 +299,7 @@ class TtsService {
     final posAudio = positionAudioAsset(positionLabel);
     if (posAudio != null) clips.add(posAudio);
 
-    await _audioService.playAssets(clips);
+    await _playWithMutex(clips);
   }
 
   /// Formats a meal code for voice announcement.
@@ -385,8 +421,7 @@ class TtsService {
     if (match2 != null) return match2.group(1);
 
     // Pattern 3: "平台名 数字" (no 号 suffix)
-    final match3 = RegExp(
-            r'(?:美团外卖|美团闪购|饿了么|京东外卖|淘宝闪购|朴朴超市|永辉超市)\s*(\d{1,6})')
+    final match3 = RegExp(r'(?:美团外卖|美团闪购|饿了么|京东外卖|淘宝闪购|朴朴超市|永辉超市)\s*(\d{1,6})')
         .firstMatch(text);
     if (match3 != null) return match3.group(1);
 
@@ -400,54 +435,54 @@ class TtsService {
   /// Speaks the "new version available" prompt.
   Future<void> speakUpdateAvailable() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/update_available.mp3']);
+    await _playWithMutex(['assets/audio/update_available.mp3']);
   }
 
   /// Speaks the download confirmation prompt with gesture hints.
   Future<void> speakConfirmDownload() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/confirm_download.mp3']);
+    await _playWithMutex(['assets/audio/confirm_download.mp3']);
   }
 
   /// Speaks the "downloading update" prompt.
   Future<void> speakDownloading() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/downloading.mp3']);
+    await _playWithMutex(['assets/audio/downloading.mp3']);
   }
 
   /// Speaks the "download complete" prompt.
   Future<void> speakDownloadComplete() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/download_complete.mp3']);
+    await _playWithMutex(['assets/audio/download_complete.mp3']);
   }
 
   /// Speaks the "download failed" prompt.
   Future<void> speakDownloadFailed() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/download_failed.mp3']);
+    await _playWithMutex(['assets/audio/download_failed.mp3']);
   }
 
   /// Speaks the "please confirm install" prompt.
   Future<void> speakInstallPrompt() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/install_prompt.mp3']);
+    await _playWithMutex(['assets/audio/install_prompt.mp3']);
   }
 
   /// Speaks the install-permission-denied prompt with settings guidance.
   Future<void> speakInstallPermissionDenied() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/install_permission_denied.mp3']);
+    await _playWithMutex(['assets/audio/install_permission_denied.mp3']);
   }
 
   /// Speaks the "please use Wi-Fi" prompt.
   Future<void> speakWifiOnly() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/wifi_only.mp3']);
+    await _playWithMutex(['assets/audio/wifi_only.mp3']);
   }
 
   /// Speaks the "update cancelled" prompt.
   Future<void> speakUpdateCancelled() async {
     if (!_isInitialized) return;
-    await _audioService.playAssets(['assets/audio/update_cancelled.mp3']);
+    await _playWithMutex(['assets/audio/update_cancelled.mp3']);
   }
 }

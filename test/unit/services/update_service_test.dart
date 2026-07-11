@@ -59,14 +59,13 @@ UpdateService _buildService({
   return UpdateService(
     prefs: prefs,
     connectivity: ConnectivityService(
-      check: () async => wifi
-          ? [ConnectivityResult.wifi]
-          : [ConnectivityResult.mobile],
+      check: () async =>
+          wifi ? [ConnectivityResult.wifi] : [ConnectivityResult.mobile],
     ),
     dio: dio,
     packageInfo: PackageInfo(
       appName: '慧眼',
-      packageName: 'com.example.smart_eye',
+      packageName: 'com.smart_eye',
       version: '0.7.0',
       buildNumber: '$localBuildNumber',
     ),
@@ -108,7 +107,8 @@ void main() {
 
     test('returns null when checked within the last 7 days', () async {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt('last_update_check_millis', DateTime(2026, 7, 10, 11, 0, 0).millisecondsSinceEpoch);
+      await prefs.setInt('last_update_check_millis',
+          DateTime(2026, 7, 10, 11, 0, 0).millisecondsSinceEpoch);
       final service = _buildService(
         prefs: prefs,
         dio: _FakeDio(_releaseResponse(20, 'https://example.com/app.apk')),
@@ -154,7 +154,7 @@ void main() {
         dio: _FailingDio(),
         packageInfo: PackageInfo(
           appName: '慧眼',
-          packageName: 'com.example.smart_eye',
+          packageName: 'com.smart_eye',
           version: '0.7.0',
           buildNumber: '10',
         ),

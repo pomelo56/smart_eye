@@ -69,7 +69,7 @@ void main() {
       // If R8 strips it, the app launches but audio is silent.
       expect(
         proguardRules,
-        contains('com.example.smart_eye.MainActivity'),
+        contains('com.smart_eye.MainActivity'),
         reason: 'MainActivity is referenced from AndroidManifest.xml but '
             'R8 sometimes cannot follow the manifest reference early '
             'enough, so we keep it explicitly.',
@@ -95,7 +95,7 @@ void main() {
       // PermissionService silently reports "unknown" and the user sees
       // no feedback when the camera is denied.
       final mainActivity = File(
-        'android/app/src/main/kotlin/com/example/smart_eye/MainActivity.kt',
+        'android/app/src/main/kotlin/com/smart_eye/MainActivity.kt',
       ).readAsStringSync();
       expect(
         mainActivity,

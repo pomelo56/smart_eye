@@ -18,6 +18,46 @@
 
 ---
 
+## [0.9.0-rc1] — 2026-07-11 (低危安全修复·发布候选版)
+
+### Security
+- **CVE-STYLE-014（低危）**：release模式下禁用debugPrint输出到logcat，防止通过系统日志泄露应用内部状态信息。在`main.dart`入口处根据`kReleaseMode`覆盖debugPrint为空函数。
+- **CVE-STYLE-016（低危）**：移除代码中残留的硬编码开发者标识信息，更新应用描述为正式产品描述。
+- **CVE-STYLE-017（低危）**：锁定pubspec.yaml所有直接依赖版本，移除`^`版本范围约束，防止`flutter pub get`意外拉取存在已知漏洞的新版本依赖，确保构建可复现。
+- **CVE-STYLE-018（低危）**：修复TtsService音频播放竞态条件，新增`_playbackMutex`互斥锁机制。每次播放新音频前先停止当前播放，确保同一时间只有一段音频序列在播放，解决快速连续触发语音播报时的音频重叠问题（符合AGENTS.md KI-001规范）。
+- **CVE-STYLE-015（低危）**：Android包名从默认的`com.example.smart_eye`正式重命名为`com.smart_eye`，同步更新namespace、applicationId、MainActivity包路径、ProGuard keep规则及相关测试用例。
+
+### Changed
+- `lib/main.dart`：release模式下禁用debugPrint输出。
+- `pubspec.yaml`：
+  - 版本升级至`0.9.0-rc1+21`
+  - 所有直接依赖锁定为精确版本（camera: 0.11.0+2、google_mlkit_text_recognition: 0.14.0、shared_preferences: 2.5.3等）
+  - Dart SDK约束改为`>=3.5.0 <4.0.0`
+  - 更新应用描述为正式产品描述
+- `lib/services/tts_service.dart`：
+  - 新增`_playbackMutex`互斥锁字段
+  - 新增`_playWithMutex()`内部方法统一处理音频播放串行化
+  - 所有23个`speak*`公共方法改为通过`_playWithMutex()`调用，不再直接调用`AudioService.playAssets()`
+  - 每次播放前先执行`stop()`确保之前的音频被中断
+- `android/app/build.gradle`：
+  - `namespace`从`com.example.smart_eye`改为`com.smart_eye`
+  - `applicationId`从`com.example.smart_eye`改为`com.smart_eye`
+- `android/app/src/main/kotlin/`：MainActivity.kt从`com/example/smart_eye/`迁移至`com/smart_eye/`目录，package声明同步更新。
+- `android/app/proguard-rules.pro`：MainActivity keep规则更新为新包名。
+- `test/unit/build_config/build_config_test.dart`：MainActivity文件路径和包名断言更新为新包名。
+- `test/unit/services/update_service_test.dart`：测试用PackageInfo的packageName更新为新包名。
+- `test/unit/services/history_service_test.dart`：修复测试用例以适配CVE-STYLE-008引入的存储混淆，新增使用`obfuscateForTest()`辅助方法准备测试数据。
+- `lib/services/history_service.dart`：新增`obfuscateForTest()`公开静态方法供测试使用。
+
+### Notes
+- 本版本修复了安全审计发现的全部18个漏洞（2个严重、4个高危、6个中危、6个低危），是首个安全加固完成的发布候选版本。
+- 包名变更后，应用签名数据目录路径变更，旧版本（v0.8.6及以前）无法直接覆盖安装，需卸载后重新安装。
+- 音频互斥锁机制确保语音播报不会重叠，所有语音提示按触发顺序串行播放，体验更稳定。
+- 依赖版本锁定后，后续构建不会自动升级依赖版本，需手动检查和更新依赖以获取安全补丁。
+- 回滚点：`v0.8.6`。如本版本引入问题，可执行 `git reset --hard v0.8.6` 回滚。
+
+---
+
 ## [0.8.6] — 2026-07-11 (中危安全修复)
 
 ### Security
