@@ -94,3 +94,4 @@ design-assets/
 
 # Git worktree scratch (e.g. release-build/ for back-filling historic APKs)
 release-build/
+.trae-html-share-packages/

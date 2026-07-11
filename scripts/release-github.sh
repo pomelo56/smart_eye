@@ -117,7 +117,6 @@ else
     # 把 release 钉死到 tag 指向的 commit（而不是 main 分支当前 HEAD），
     # 否则下次 main 推进时，这个 release 的 target_commitish 会被自动跟踪，
     # 破坏 release ↔ commit 的一一对应关系。
-    local target_commit
     target_commit=$(git rev-list -n 1 "$VERSION_TAG" 2>/dev/null || echo "main")
     UPLOAD_ARGS=(release create "$VERSION_TAG" "$APK_PATH"
                  --repo "$GITHUB_REPO"

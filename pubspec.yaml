@@ -2,7 +2,7 @@ name: smart_eye
 description: "AI视障寻物助手 - 通过摄像头识别物品并用语音播报"
 publish_to: 'none'
 
-version: 0.9.0-rc1+21
+version: 0.9.0-rc2+22
 
 environment:
   sdk: '>=3.5.0 <4.0.0'
