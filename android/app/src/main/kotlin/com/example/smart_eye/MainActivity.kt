@@ -37,6 +37,7 @@ class MainActivity : FlutterActivity() {
     private val channelName = "com.smart_eye/audio"
     private val permissionChannelName = "com.smart_eye/permission"
     private val installerChannelName = "com.smart_eye/installer"
+    private val verifierChannelName = "com.smart_eye/apk_verifier"
     private val cameraPermissionRequestCode = 4242
 
     /// File in [Context.getNoBackupFilesDir] that records whether we have
@@ -131,6 +132,21 @@ class MainActivity : FlutterActivity() {
                 "installApk" -> {
                     val path = call.argument<String>("path") ?: ""
                     installApk(path, result)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // APK Verifier channel - CVE-STYLE-001: 防止恶意APK安装
+        val verifierChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            verifierChannelName
+        )
+        verifierChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "verifyApkSignature" -> {
+                    val path = call.argument<String>("path") ?: ""
+                    result.success(verifyApkSignature(path))
                 }
                 else -> result.notImplemented()
             }
@@ -446,6 +462,64 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             android.util.Log.e("SmartEye", "installApk failed: ${e.message}")
             result.success(mapOf("success" to false, "error" to (e.message ?: "unknown")))
+        }
+    }
+
+    /**
+     * CVE-STYLE-001: 验证APK文件签名是否与当前应用签名一致。
+     * 这是防止供应链攻击的关键防护：即使下载了恶意APK，
+     * 由于签名不匹配，也不会被安装。
+     */
+    private fun verifyApkSignature(apkPath: String): Boolean {
+        if (apkPath.isEmpty()) return false
+        val apkFile = File(apkPath)
+        if (!apkFile.exists()) return false
+
+        return try {
+            // 获取下载APK的包信息和签名
+            val apkFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNATURES.toLong())
+            } else {
+                null
+            }
+
+            @Suppress("DEPRECATION")
+            val apkInfo = if (apkFlags != null) {
+                packageManager.getPackageArchiveInfo(apkPath, apkFlags)
+            } else {
+                packageManager.getPackageArchiveInfo(apkPath, PackageManager.GET_SIGNATURES)
+            } ?: return false
+
+            // 获取当前应用的签名
+            val currentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNATURES.toLong())
+            } else {
+                null
+            }
+
+            @Suppress("DEPRECATION")
+            val currentInfo = if (currentFlags != null) {
+                packageManager.getPackageInfo(packageName, currentFlags)
+            } else {
+                packageManager.getPackageInfo(packageName, PackageManager.GET_SIGNATURES)
+            } ?: return false
+
+            // 比对签名
+            @Suppress("DEPRECATION")
+            val apkSigs = apkInfo.signatures ?: return false
+            @Suppress("DEPRECATION")
+            val currentSigs = currentInfo.signatures ?: return false
+
+            if (apkSigs.size != currentSigs.size) return false
+
+            currentSigs.all { currentSig ->
+                apkSigs.any { apkSig ->
+                    currentSig.toCharsString() == apkSig.toCharsString()
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SmartEye", "APK签名验证失败: ${e.message}")
+            false
         }
     }
 }

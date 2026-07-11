@@ -463,9 +463,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _installSettingsPending = false;
     final result = await _installService.installApk(apkPath);
     if (!result.success) {
-      _log('打开安装器失败: ${result.error}');
-      await _ttsService.stop();
-      await _ttsService.speakDownloadFailed();
+      if (result.error == 'signature_mismatch') {
+        // CVE-STYLE-001: APK签名校验失败，安全警告
+        _log('安全警告：APK签名验证失败，安装已终止');
+        await _ttsService.stop();
+        await _ttsService.speakDownloadFailed(); // TODO: 替换为专门的安全警告语音
+        _log('签名不匹配，可能是下载被篡改或APK损坏');
+      } else {
+        _log('打开安装器失败: ${result.error}');
+        await _ttsService.stop();
+        await _ttsService.speakDownloadFailed();
+      }
       _pendingInstallApkPath = null;
       _resumeScanningAfterUpdate();
     }

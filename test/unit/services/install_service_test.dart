@@ -1,6 +1,19 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:smart_eye/services/apk_verifier.dart';
 import 'package:smart_eye/services/install_service.dart';
+
+/// Fake ApkVerifier that always returns trusted for testing.
+class FakeTrustedApkVerifier implements ApkVerifier {
+  @override
+  Future<bool> isApkTrusted(String apkPath) async => true;
+}
+
+/// Fake ApkVerifier that always returns untrusted (signature mismatch).
+class FakeUntrustedApkVerifier implements ApkVerifier {
+  @override
+  Future<bool> isApkTrusted(String apkPath) async => false;
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -21,7 +34,7 @@ void main() {
           return null;
         });
 
-        final service = InstallService();
+        final service = InstallService(verifier: FakeTrustedApkVerifier());
         expect(await service.canInstall(), isTrue);
       });
 
@@ -32,7 +45,7 @@ void main() {
           return null;
         });
 
-        final service = InstallService();
+        final service = InstallService(verifier: FakeTrustedApkVerifier());
         expect(await service.canInstall(), isFalse);
       });
 
@@ -40,7 +53,7 @@ void main() {
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(channel, (call) async => null);
 
-        final service = InstallService();
+        final service = InstallService(verifier: FakeTrustedApkVerifier());
         expect(await service.canInstall(), isFalse);
       });
     });
@@ -53,7 +66,7 @@ void main() {
           return null;
         });
 
-        final service = InstallService();
+        final service = InstallService(verifier: FakeTrustedApkVerifier());
         expect(await service.openInstallSettings(), isTrue);
       });
 
@@ -64,7 +77,7 @@ void main() {
           return null;
         });
 
-        final service = InstallService();
+        final service = InstallService(verifier: FakeTrustedApkVerifier());
         expect(await service.openInstallSettings(), isFalse);
       });
     });
@@ -81,7 +94,7 @@ void main() {
           return null;
         });
 
-        final service = InstallService();
+        final service = InstallService(verifier: FakeTrustedApkVerifier());
         final result = await service.installApk('/tmp/app.apk');
         expect(result.success, isTrue);
         expect(result.error, isNull);
@@ -100,7 +113,7 @@ void main() {
           return null;
         });
 
-        final service = InstallService();
+        final service = InstallService(verifier: FakeTrustedApkVerifier());
         final result = await service.installApk('/tmp/app.apk');
         expect(result.success, isFalse);
         expect(result.error, equals('permission_denied'));
@@ -118,7 +131,7 @@ void main() {
           return null;
         });
 
-        final service = InstallService();
+        final service = InstallService(verifier: FakeTrustedApkVerifier());
         final result = await service.installApk('/tmp/missing.apk');
         expect(result.success, isFalse);
         expect(result.error, equals('file_not_found'));
@@ -128,7 +141,7 @@ void main() {
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(channel, (call) async => null);
 
-        final service = InstallService();
+        final service = InstallService(verifier: FakeTrustedApkVerifier());
         final result = await service.installApk('/tmp/app.apk');
         expect(result.success, isFalse);
         expect(result.error, equals('empty_response'));
@@ -146,9 +159,36 @@ void main() {
           return null;
         });
 
-        final service = InstallService();
+        final service = InstallService(verifier: FakeTrustedApkVerifier());
         await service.installApk('/tmp/smart_eye.apk');
         expect(capturedPath, equals('/tmp/smart_eye.apk'));
+      });
+
+      test('returns signature_mismatch when APK verification fails (CVE-STYLE-001)', () async {
+        // 即使平台installer返回成功，签名校验失败也应该阻止安装
+        bool installerCalled = false;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'installApk') {
+            installerCalled = true;
+            return <String, dynamic>{'success': true};
+          }
+          return null;
+        });
+
+        final service = InstallService(verifier: FakeUntrustedApkVerifier());
+        final result = await service.installApk('/tmp/app.apk');
+        expect(result.success, isFalse);
+        expect(result.error, equals('signature_mismatch'));
+        expect(result.message, contains('签名'));
+        expect(installerCalled, isFalse, reason: '安装器不应被调用');
+      });
+
+      test('returns signature_mismatch for empty path', () async {
+        final service = InstallService(verifier: FakeUntrustedApkVerifier());
+        final result = await service.installApk('');
+        expect(result.success, isFalse);
+        expect(result.error, equals('signature_mismatch'));
       });
     });
   });
