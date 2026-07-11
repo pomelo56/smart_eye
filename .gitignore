@@ -11,6 +11,8 @@ ios/Flutter/Flutter.framework
 ios/Flutter/App.framework
 android/.gradle/
 android/app/*.keystore
+android/app/*.jks
+android/key.properties
 *.iml
 .metadata
 .packages

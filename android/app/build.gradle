@@ -5,6 +5,13 @@ plugins {
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+// 加载签名配置 - CVE-STYLE-002
+def keystorePropertiesFile = rootProject.file("key.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace = "com.example.smart_eye"
     compileSdk = 36
@@ -48,11 +55,19 @@ android {
         }
     }
 
+    signingConfigs {
+        release {
+            keyAlias keystoreProperties['keyAlias']
+            keyPassword keystoreProperties['keyPassword']
+            storeFile keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null
+            storePassword keystoreProperties['storePassword']
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.debug
+            // CVE-STYLE-002: 使用正式签名密钥，如果key.properties不存在则fallback到debug（开发环境）
+            signingConfig = keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
 
             // R8 code shrinking + resource shrinking (enabled in v0.7.0).
             // - minifyEnabled: removes unused Java/Kotlin code (saves 5-10 MB)
